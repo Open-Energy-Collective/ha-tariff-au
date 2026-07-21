@@ -33,12 +33,12 @@ Copy `custom_components/oec_tariff/` to your HA config directory.
 
 | Entity | Unit | Description |
 |--------|------|-------------|
-| `sensor.oec_current_rate` | $/kWh | Active energy rate now |
-| `sensor.oec_current_period` | — | peak, off_peak, shoulder, etc. |
-| `sensor.oec_daily_supply_charge` | $/day | Fixed daily network charge |
-| `sensor.oec_demand_rate` | $/kW/month | Demand charge rate |
-| `sensor.oec_tariff_name` | — | Human-readable tariff name |
-| `binary_sensor.oec_in_demand_window` | on/off | Whether demand is being measured |
+| `sensor.oec_tariff_current_rate` | $/kWh | Active energy rate now |
+| `sensor.oec_tariff_current_period` | — | peak, off_peak, shoulder, etc. |
+| `sensor.oec_tariff_daily_supply_charge` | $/day | Fixed daily network charge |
+| `sensor.oec_tariff_demand_rate` | $/kW/month | Demand charge rate |
+| `sensor.oec_tariff_tariff_name` | — | Human-readable tariff name |
+| `binary_sensor.oec_tariff_in_demand_window` | Active/Inactive | Whether demand is being measured |
 
 ## Example Automations
 
@@ -48,8 +48,8 @@ automation:
   - alias: "Pause EV charging during demand window"
     trigger:
       - platform: state
-        entity_id: binary_sensor.oec_in_demand_window
-        to: "on"
+        entity_id: binary_sensor.oec_tariff_in_demand_window
+        to: "Active"
     action:
       - service: switch.turn_off
         target:

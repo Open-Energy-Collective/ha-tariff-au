@@ -41,7 +41,7 @@ class OecBaseSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": f"OEC Tariff ({coordinator.dnsp}/{coordinator.tariff})",
+            "name": f"Tariff ({coordinator.dnsp}/{coordinator.tariff})",
             "manufacturer": "Open Energy Collective",
             "model": "Network Tariff",
         }
@@ -53,7 +53,7 @@ class OecCurrentRateSensor(OecBaseSensor):
     def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, "current_rate")
-        self._attr_name = "OEC Current Rate"
+        self._attr_name = "Current Rate"
         self._attr_native_unit_of_measurement = "$/kWh"
         self._attr_device_class = SensorDeviceClass.MONETARY
         self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -87,7 +87,7 @@ class OecCurrentPeriodSensor(OecBaseSensor):
     def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, "current_period")
-        self._attr_name = "OEC Current Period"
+        self._attr_name = "Current Period"
         self._attr_icon = "mdi:clock-time-four-outline"
 
     @property
@@ -104,7 +104,7 @@ class OecDailySupplyChargeSensor(OecBaseSensor):
     def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, "daily_supply_charge")
-        self._attr_name = "OEC Daily Supply Charge"
+        self._attr_name = "Daily Supply Charge"
         self._attr_native_unit_of_measurement = "$/day"
         self._attr_device_class = SensorDeviceClass.MONETARY
         self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -124,7 +124,7 @@ class OecDemandRateSensor(OecBaseSensor):
     def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, "demand_rate")
-        self._attr_name = "OEC Demand Rate"
+        self._attr_name = "Demand Rate"
         self._attr_native_unit_of_measurement = "$/kW/month"
         self._attr_device_class = SensorDeviceClass.MONETARY
         self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -161,7 +161,7 @@ class OecTariffNameSensor(OecBaseSensor):
     def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, "tariff_name")
-        self._attr_name = "OEC Tariff Name"
+        self._attr_name = "Tariff Name"
         self._attr_icon = "mdi:tag-text-outline"
 
     @property

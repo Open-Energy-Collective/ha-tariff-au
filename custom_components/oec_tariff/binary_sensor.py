@@ -1,7 +1,6 @@
 """Binary sensor entities for OEC Tariff."""
 
 from homeassistant.components.binary_sensor import (
-    BinarySensorDeviceClass,
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -28,12 +27,12 @@ class OecInDemandWindowSensor(CoordinatorEntity, BinarySensorEntity):
         """Initialize."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_in_demand_window"
-        self._attr_name = "OEC In Demand Window"
-        self._attr_device_class = BinarySensorDeviceClass.RUNNING
+        self._attr_name = "In Demand Window"
+        self._attr_device_class = None
         self._attr_icon = "mdi:flash-alert"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": f"OEC Tariff ({coordinator.dnsp}/{coordinator.tariff})",
+            "name": f"Tariff ({coordinator.dnsp}/{coordinator.tariff})",
             "manufacturer": "Open Energy Collective",
             "model": "Network Tariff",
         }
@@ -44,3 +43,10 @@ class OecInDemandWindowSensor(CoordinatorEntity, BinarySensorEntity):
         if self.coordinator.data and self.coordinator.data.get("rate"):
             return self.coordinator.data["rate"].get("in_demand_window", False)
         return None
+
+    @property
+    def state(self) -> str | None:
+        """Return Active/Inactive instead of on/off."""
+        if self.is_on is None:
+            return None
+        return "Active" if self.is_on else "Inactive"

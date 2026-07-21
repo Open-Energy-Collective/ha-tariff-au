@@ -1,0 +1,12 @@
+{
+  "domain": "oec_tariff",
+  "name": "OEC Tariff",
+  "codeowners": ["@Open-Energy-Collective"],
+  "config_flow": true,
+  "documentation": "https://github.com/Open-Energy-Collective/integration_hass_oec-tariff",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/Open-Energy-Collective/integration_hass_oec-tariff/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

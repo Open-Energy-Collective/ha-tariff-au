@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select your DNSP",
+        "description": "Choose your electricity distribution network service provider.",
+        "data": {
+          "dnsp": "DNSP"
+        }
+      },
+      "tariff": {
+        "title": "Select your tariff",
+        "description": "Choose your network tariff code (check your bill or ask your retailer).",
+        "data": {
+          "tariff": "Tariff"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to OEC Tariff API"
+    }
+  }
+}

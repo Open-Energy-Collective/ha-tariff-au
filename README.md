@@ -1,19 +1,20 @@
 # OEC Tariff — Home Assistant Integration
 
-Real-time Australian network tariff data in Home Assistant, powered by the [OEC Tariff Data Service](https://api.openenergy.org.au/docs).
+Real-time Australian network tariff data in Home Assistant, powered by the [Tariff Data Service](https://api.openenergy.org.au/docs).
 
 ## Features
 
 - **Current rate** sensor ($/kWh) — updates every 5 minutes
 - **Current period** sensor — peak, off_peak, shoulder, solar_soak
-- **In demand window** binary sensor — automations can react to demand measurement periods
+- **Demand window** binary sensor — Active/Inactive for automation triggers
 - **Daily supply charge** sensor
 - **Demand rate** sensor with window/method attributes
-- **Config flow UI** — pick your DNSP and tariff from a dropdown (fetched live from API)
+- **Demand charge tracker** — monitors your grid power and calculates peak demand charges
+- **Config flow UI** — pick your DNSP, tariff, and optionally configure demand tracking
 
 ## Supported DNSPs
 
-All DNSPs served by the OEC Tariff API (currently 9 across NSW, VIC, QLD, SA, ACT, NT).
+All DNSPs served by the Tariff Data Service (currently 9 across NSW, VIC, QLD, SA, ACT, NT).
 
 ## Installation
 
@@ -24,36 +25,86 @@ All DNSPs served by the OEC Tariff API (currently 9 across NSW, VIC, QLD, SA, AC
 3. Restart Home Assistant
 4. Go to Settings → Integrations → Add Integration → "OEC Tariff"
 5. Select your DNSP and tariff code
+6. Optionally configure demand tracking (select power sensor + billing day)
 
 ### Manual
 
 Copy `custom_components/oec_tariff/` to your HA config directory.
 
+## Configuration
+
+### Step 1: Select DNSP
+Choose your electricity distribution network (e.g., Energex, Ausgrid, SA Power Networks).
+
+### Step 2: Select Tariff
+Choose your network tariff code. Check your bill or ask your retailer.
+
+### Step 3: Demand Tracking (optional)
+If your tariff has a demand charge component:
+- **Grid power sensor**: Any entity that reports grid import power (kW or W)
+- **Billing day**: Day of month your billing cycle resets (default: 1)
+
 ## Sensors Created
+
+### Rate Sensors
 
 | Entity | Unit | Description |
 |--------|------|-------------|
 | `sensor.oec_tariff_current_rate` | $/kWh | Active energy rate now |
-| `sensor.oec_tariff_current_period` | — | peak, off_peak, shoulder, etc. |
+| `sensor.oec_tariff_current_period` | — | peak, off_peak, shoulder, solar_soak |
 | `sensor.oec_tariff_daily_supply_charge` | $/day | Fixed daily network charge |
 | `sensor.oec_tariff_demand_rate` | $/kW/month | Demand charge rate |
 | `sensor.oec_tariff_tariff_name` | — | Human-readable tariff name |
-| `binary_sensor.oec_tariff_in_demand_window` | Active/Inactive | Whether demand is being measured |
+| `binary_sensor.oec_tariff_demand_window` | Active/Inactive | Whether demand is being measured |
+
+### Demand Tracking Sensors (if power entity configured)
+
+| Entity | Unit | Description |
+|--------|------|-------------|
+| `sensor.oec_tariff_month_peak_demand` | kW | Highest measured demand this billing month |
+| `sensor.oec_tariff_monthly_demand_charge` | $ | peak_kW × demand_rate |
+| `sensor.oec_tariff_demand_surcharge_per_kwh` | $/kWh | Demand charge amortized per kWh |
+
+### Demand Tracking Details
+
+The tracker automatically uses the correct measurement methodology for your DNSP:
+
+| Method | DNSPs | How it works |
+|--------|-------|--------------|
+| `30min_avg` | Energex | Average kW over highest 30-min block |
+| `30min_max` | Ausgrid, Endeavour, Essential, Evoenergy, Power Water, SAPN | Max kW in any 30-min block |
+| `monthly_peak` | AusNet | Absolute max during demand window |
+| `rolling_12month_max` | Jemena | Max of last 12 monthly peaks |
+
+Samples every 30 seconds. Only records during the demand window (time, days, and season as defined by your DNSP). Persists across restarts.
 
 ## Example Automations
 
 ```yaml
-# Don't run high-power appliances during demand window
+# Pause EV charging during demand window
 automation:
   - alias: "Pause EV charging during demand window"
     trigger:
       - platform: state
-        entity_id: binary_sensor.oec_tariff_in_demand_window
+        entity_id: binary_sensor.oec_tariff_demand_window
         to: "Active"
     action:
       - service: switch.turn_off
         target:
           entity_id: switch.ev_charger
+
+# Alert when demand charge is getting high
+automation:
+  - alias: "Demand charge warning"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.oec_tariff_monthly_demand_charge
+        above: 40
+    action:
+      - service: notify.mobile_app
+        data:
+          title: "Demand charge alert"
+          message: "Monthly demand charge is now ${{ states('sensor.oec_tariff_monthly_demand_charge') }}"
 ```
 
 ## Data Source

@@ -47,17 +47,51 @@ custom_components/{domain}/
 - Group under a single Device per config entry
 
 ## Testing
-- Sync to HA via rsync for rapid iteration
-- Delete and re-add integration when config structure changes
-- Force-add files to HA git repo (`.gitignore` with `*.*` blocks JSON/PNG)
-- Check HA logs for import errors after restart
+
+### Requirements
+- **All tests must pass before every commit** — run `.venv/bin/python -m pytest tests/ -v`
+- Use the project `.venv` (has `homeassistant` + `pytest-homeassistant-custom-component`)
+- System Python does NOT have `homeassistant` installed — always use `.venv`
+
+### Test Structure
+```
+tests/
+├── __init__.py
+├── conftest.py              # Shared fixtures (enable_custom_integrations)
+├── test_demand_tracker.py   # Pure logic: is_in_demand_window()
+├── test_binary_sensor.py    # Binary sensor logic: transitions, _status_at()
+├── test_config_flow.py      # Config flow steps (TODO)
+├── test_sensor.py           # Sensor value mapping (TODO)
+└── test_coordinator.py      # API response handling (TODO)
+```
+
+### Test Principles
+- **Pure logic tests**: Test functions like `is_in_demand_window()` directly — no mocking needed
+- **Sensor tests**: Use fake coordinator/entry classes to test sensor properties without HA runtime
+- **Config flow tests**: Use `pytest-homeassistant-custom-component` fixtures for full integration tests
+- **Edge cases**: Always test boundary conditions (window start inclusive, end exclusive, overnight spans, season boundaries)
+
+### Coverage Targets
+- `demand_tracker.py` — window logic, billing day reset, measurement methods
+- `binary_sensor.py` — transition calculation, state at time, no-demand fallback
+- `config_flow.py` — each step, error handling, options flow
+- `sensor.py` — value mapping from coordinator data
+- `coordinator.py` — API response parsing, error handling
+
+### Pre-commit Checklist
+1. `.venv/bin/python -m pytest tests/ -v` — ALL PASS
+2. No new code without corresponding test for testable logic
+3. Don't commit broken tests "to fix later"
 
 ## Deployment to HA
 1. Develop in `/home/zed/projects/OEC/repos/integration_hass_oec-tariff/`
-2. Rsync to `~/hass/Home_Assistant/custom_components/oec_tariff/`
-3. Force-add new files: `git add -f custom_components/oec_tariff/`
-4. Commit and push HA repo
-5. Git pull on HA device, restart
+2. Run tests: `.venv/bin/python -m pytest tests/ -v` — must all pass
+3. Rsync to `~/hass/Home_Assistant/custom_components/oec_tariff/`
+4. Force-add new files: `git add -f custom_components/oec_tariff/` (HA `.gitignore` has `*.*`)
+5. Commit and push HA repo
+6. Git pull on HA device, restart
+7. Delete and re-add integration when config structure changes
+8. Check HA logs for import errors after restart
 
 ## HACS Compatibility
 - Include `hacs.json` at repo root

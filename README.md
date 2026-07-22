@@ -46,24 +46,26 @@ If your tariff has a demand charge component:
 
 ## Sensors Created
 
+Entity IDs follow the pattern `sensor.tariff_{dnsp}_{tariff}_{name}`. For example, with Energex tariff 3900:
+
 ### Rate Sensors
 
 | Entity | Unit | Description |
 |--------|------|-------------|
-| `sensor.oec_tariff_current_rate` | $/kWh | Active energy rate now |
-| `sensor.oec_tariff_current_period` | — | peak, off_peak, shoulder, solar_soak |
-| `sensor.oec_tariff_daily_supply_charge` | $/day | Fixed daily network charge |
-| `sensor.oec_tariff_demand_rate` | $/kW/month | Demand charge rate |
-| `sensor.oec_tariff_tariff_name` | — | Human-readable tariff name |
-| `binary_sensor.oec_tariff_demand_window` | Active/Inactive | Whether demand is being measured |
+| `sensor.tariff_energex_3900_current_rate` | $/kWh | Active energy rate now |
+| `sensor.tariff_energex_3900_current_period` | — | peak, off_peak, shoulder, solar_soak |
+| `sensor.tariff_energex_3900_daily_supply_charge` | $/day | Fixed daily network charge |
+| `sensor.tariff_energex_3900_demand_rate` | $/kW/month | Demand charge rate |
+| `sensor.tariff_energex_3900_tariff_name` | — | Human-readable tariff name |
+| `binary_sensor.tariff_energex_3900_demand_window` | Active/Inactive | Whether demand is being measured |
 
 ### Demand Tracking Sensors (if power entity configured)
 
 | Entity | Unit | Description |
 |--------|------|-------------|
-| `sensor.oec_tariff_month_peak_demand` | kW | Highest measured demand this billing month |
-| `sensor.oec_tariff_monthly_demand_charge` | $ | peak_kW × demand_rate |
-| `sensor.oec_tariff_demand_surcharge_per_kwh` | $/kWh | Demand charge amortized per kWh |
+| `sensor.tariff_energex_3900_month_peak_demand` | kW | Highest measured demand this billing month |
+| `sensor.tariff_energex_3900_monthly_demand_charge` | $ | peak_kW × demand_rate |
+| `sensor.tariff_energex_3900_demand_surcharge` | $/kWh | Demand charge amortized per kWh |
 
 ### Demand Tracking Details
 
@@ -86,7 +88,7 @@ automation:
   - alias: "Pause EV charging during demand window"
     trigger:
       - platform: state
-        entity_id: binary_sensor.oec_tariff_demand_window
+        entity_id: binary_sensor.tariff_energex_3900_demand_window
         to: "Active"
     action:
       - service: switch.turn_off
@@ -98,13 +100,13 @@ automation:
   - alias: "Demand charge warning"
     trigger:
       - platform: numeric_state
-        entity_id: sensor.oec_tariff_monthly_demand_charge
+        entity_id: sensor.tariff_energex_3900_monthly_demand_charge
         above: 40
     action:
       - service: notify.mobile_app
         data:
           title: "Demand charge alert"
-          message: "Monthly demand charge is now ${{ states('sensor.oec_tariff_monthly_demand_charge') }}"
+          message: "Monthly demand charge is now ${{ states('sensor.tariff_energex_3900_monthly_demand_charge') }}"
 ```
 
 ## Data Source

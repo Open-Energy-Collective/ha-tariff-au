@@ -5,11 +5,23 @@ import logging
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import CONF_API_URL, CONF_BILLING_DAY, CONF_DNSP, CONF_POWER_ENTITY, CONF_TARIFF, DEFAULT_API_URL, DOMAIN
+from .const import (
+    CONF_API_URL,
+    CONF_BILLING_DAY,
+    CONF_DNSP,
+    CONF_POWER_ENTITY,
+    CONF_TARIFF,
+    DEFAULT_API_URL,
+    DEFAULT_BILLING_DAY,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+BILLING_DAY_OPTIONS = {i: f"{i}{'st' if i == 1 else 'nd' if i == 2 else 'rd' if i == 3 else 'th'} of month" for i in range(1, 29)}
 
 
 class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -122,7 +134,7 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
             if user_input.get(CONF_POWER_ENTITY):
                 data[CONF_POWER_ENTITY] = user_input[CONF_POWER_ENTITY]
-                data[CONF_BILLING_DAY] = user_input.get(CONF_BILLING_DAY, 1)
+                data[CONF_BILLING_DAY] = user_input.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY)
 
             return self.async_create_entry(
                 title=f"{self._selected_dnsp}/{self._selected_tariff}",
@@ -138,8 +150,59 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             device_class="power",
                         )
                     ),
-                    vol.Optional(CONF_BILLING_DAY, default=1): vol.All(
-                        vol.Coerce(int), vol.Range(min=1, max=28)
+                    vol.Optional(CONF_BILLING_DAY, default=DEFAULT_BILLING_DAY): vol.In(
+                        BILLING_DAY_OPTIONS
+                    ),
+                }
+            ),
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Get the options flow handler."""
+        return OecTariffOptionsFlow(config_entry)
+
+
+class OecTariffOptionsFlow(config_entries.OptionsFlow):
+    """Handle options for OEC Tariff."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow."""
+        self._config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Handle options step."""
+        from homeassistant.helpers import selector
+
+        if user_input is not None:
+            # Update the config entry data
+            new_data = {**self._config_entry.data}
+            if user_input.get(CONF_POWER_ENTITY):
+                new_data[CONF_POWER_ENTITY] = user_input[CONF_POWER_ENTITY]
+            elif CONF_POWER_ENTITY in new_data:
+                del new_data[CONF_POWER_ENTITY]
+            new_data[CONF_BILLING_DAY] = user_input.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY)
+
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, data=new_data
+            )
+            return self.async_create_entry(title="", data={})
+
+        current_power = self._config_entry.data.get(CONF_POWER_ENTITY, "")
+        current_billing_day = self._config_entry.data.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_POWER_ENTITY, default=current_power): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            device_class="power",
+                        )
+                    ),
+                    vol.Optional(CONF_BILLING_DAY, default=current_billing_day): vol.In(
+                        BILLING_DAY_OPTIONS
                     ),
                 }
             ),

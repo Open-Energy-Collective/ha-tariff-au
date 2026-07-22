@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_BILLING_DAY, DEFAULT_BILLING_DAY
 
@@ -151,6 +152,10 @@ class DemandTracker:
     @callback
     def _async_sample(self, now: datetime) -> None:
         """Sample the power entity and track demand."""
+        # async_track_time_interval fires with `now` in UTC; window/day/month
+        # checks below assume local wall-clock time, so convert first.
+        now = dt_util.as_local(now)
+
         # Check billing month reset
         if self._is_new_billing_month(now):
             self._reset_billing_month(now)

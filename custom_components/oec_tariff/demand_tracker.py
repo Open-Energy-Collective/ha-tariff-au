@@ -1,0 +1,228 @@
+"""Demand charge tracker — monitors power and calculates peak demand."""
+
+import logging
+from datetime import datetime, time, timedelta
+
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.restore_state import RestoreEntity
+
+from .const import CONF_BILLING_DAY, DEFAULT_BILLING_DAY
+
+_LOGGER = logging.getLogger(__name__)
+
+SAMPLE_INTERVAL = timedelta(seconds=30)
+
+
+class DemandTracker:
+    """Tracks peak demand based on DNSP measurement methodology."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        power_entity_id: str,
+        measurement_method: str,
+        window_start: str,
+        window_end: str,
+        days: str,
+        season_months: list[int] | None,
+        billing_day: int,
+    ) -> None:
+        """Initialize demand tracker."""
+        self.hass = hass
+        self.power_entity_id = power_entity_id
+        self.measurement_method = measurement_method
+        self.window_start = self._parse_time(window_start)
+        self.window_end = self._parse_time(window_end)
+        self.days = days
+        self.season_months = season_months
+        self.billing_day = billing_day
+
+        # State
+        self.month_peak_kw: float = 0.0
+        self.previous_month_peak_kw: float = 0.0
+        self.current_block_samples: list[float] = []
+        self.current_block_start: datetime | None = None
+        self.last_reset: datetime | None = None
+        self.monthly_peaks_12: list[float] = []  # For rolling_12month_max
+
+        # Listener handle
+        self._unsub_timer = None
+
+    @staticmethod
+    def _parse_time(time_str: str) -> time:
+        """Parse HH:MM to time object."""
+        parts = time_str.split(":")
+        return time(int(parts[0]), int(parts[1]))
+
+    def _is_in_demand_window(self, now: datetime) -> bool:
+        """Check if current datetime is within the demand measurement window."""
+        current_time = now.time()
+        weekday = now.weekday()
+        month = now.month
+
+        # Day check
+        if self.days == "weekdays" and weekday >= 5:
+            return False
+        if self.days == "weekends" and weekday < 5:
+            return False
+
+        # Season check
+        if self.season_months and month not in self.season_months:
+            return False
+
+        # Time check (handle overnight windows)
+        if self.window_start == self.window_end == time(0, 0):
+            return True  # 00:00 to 00:00 means "any time"
+        if self.window_start <= self.window_end:
+            return self.window_start <= current_time < self.window_end
+        else:
+            return current_time >= self.window_start or current_time < self.window_end
+
+    def _get_block_start(self, now: datetime) -> datetime:
+        """Get the start of the current clock-aligned 30-min block."""
+        minute = 0 if now.minute < 30 else 30
+        return now.replace(minute=minute, second=0, microsecond=0)
+
+    def _is_new_billing_month(self, now: datetime) -> bool:
+        """Check if we've crossed a billing cycle boundary."""
+        if self.last_reset is None:
+            return True
+        # Calculate the billing reset date for the current period
+        if now.day >= self.billing_day:
+            reset_date = now.replace(day=self.billing_day)
+        else:
+            # Previous month's billing day
+            first_of_month = now.replace(day=1)
+            prev_month = first_of_month - timedelta(days=1)
+            reset_date = prev_month.replace(day=self.billing_day)
+        return self.last_reset < reset_date.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) <= now
+
+    def _reset_billing_month(self, now: datetime) -> None:
+        """Reset peak demand for new billing month."""
+        self.previous_month_peak_kw = self.month_peak_kw
+
+        # Store for rolling 12-month (Jemena)
+        self.monthly_peaks_12.append(self.month_peak_kw)
+        if len(self.monthly_peaks_12) > 12:
+            self.monthly_peaks_12 = self.monthly_peaks_12[-12:]
+
+        self.month_peak_kw = 0.0
+        self.last_reset = now
+        _LOGGER.info(
+            "Demand tracker billing reset. Previous peak: %.3f kW", self.previous_month_peak_kw
+        )
+
+    def _process_block(self) -> None:
+        """Process a completed 30-min block and update peak if needed."""
+        if not self.current_block_samples:
+            return
+
+        if self.measurement_method == "30min_avg":
+            block_value = sum(self.current_block_samples) / len(self.current_block_samples)
+        elif self.measurement_method == "30min_max":
+            block_value = max(self.current_block_samples)
+        elif self.measurement_method == "monthly_peak":
+            block_value = max(self.current_block_samples)
+        elif self.measurement_method == "rolling_12month_max":
+            block_value = max(self.current_block_samples)
+        else:
+            block_value = sum(self.current_block_samples) / len(self.current_block_samples)
+
+        if block_value > self.month_peak_kw:
+            self.month_peak_kw = round(block_value, 3)
+            _LOGGER.debug("New month peak demand: %.3f kW", self.month_peak_kw)
+
+    @callback
+    def _async_sample(self, now: datetime) -> None:
+        """Sample the power entity and track demand."""
+        # Check billing month reset
+        if self._is_new_billing_month(now):
+            self._reset_billing_month(now)
+
+        # Check if in demand window
+        if not self._is_in_demand_window(now):
+            # If we had a block in progress, process it
+            if self.current_block_samples:
+                self._process_block()
+                self.current_block_samples = []
+                self.current_block_start = None
+            return
+
+        # Read power entity
+        state = self.hass.states.get(self.power_entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return
+
+        try:
+            power_kw = float(state.state)
+        except (ValueError, TypeError):
+            return
+
+        # Convert W to kW if needed
+        unit = state.attributes.get("unit_of_measurement", "")
+        if unit == "W":
+            power_kw = power_kw / 1000.0
+
+        # Check if we've moved to a new 30-min block
+        block_start = self._get_block_start(now)
+        if self.current_block_start != block_start:
+            # Process previous block
+            self._process_block()
+            self.current_block_samples = []
+            self.current_block_start = block_start
+
+        # For monthly_peak method, just track max directly (no blocking needed)
+        if self.measurement_method == "monthly_peak":
+            if power_kw > self.month_peak_kw:
+                self.month_peak_kw = round(power_kw, 3)
+        else:
+            self.current_block_samples.append(power_kw)
+
+    @property
+    def chargeable_demand(self) -> float:
+        """Return the demand value used for charging."""
+        if self.measurement_method == "rolling_12month_max":
+            all_peaks = self.monthly_peaks_12 + [self.month_peak_kw]
+            return max(all_peaks) if all_peaks else 0.0
+        return self.month_peak_kw
+
+    def start(self) -> None:
+        """Start sampling."""
+        self._unsub_timer = async_track_time_interval(
+            self.hass, self._async_sample, SAMPLE_INTERVAL
+        )
+        _LOGGER.info(
+            "Demand tracker started: entity=%s method=%s window=%s-%s days=%s",
+            self.power_entity_id,
+            self.measurement_method,
+            self.window_start,
+            self.window_end,
+            self.days,
+        )
+
+    def stop(self) -> None:
+        """Stop sampling."""
+        if self._unsub_timer:
+            self._unsub_timer()
+            self._unsub_timer = None
+
+    def restore_state(self, data: dict) -> None:
+        """Restore state from HA storage."""
+        self.month_peak_kw = data.get("month_peak_kw", 0.0)
+        self.previous_month_peak_kw = data.get("previous_month_peak_kw", 0.0)
+        self.monthly_peaks_12 = data.get("monthly_peaks_12", [])
+        last_reset = data.get("last_reset")
+        if last_reset:
+            self.last_reset = datetime.fromisoformat(last_reset)
+
+    def save_state(self) -> dict:
+        """Return state for HA storage."""
+        return {
+            "month_peak_kw": self.month_peak_kw,
+            "previous_month_peak_kw": self.previous_month_peak_kw,
+            "monthly_peaks_12": self.monthly_peaks_12,
+            "last_reset": self.last_reset.isoformat() if self.last_reset else None,
+        }

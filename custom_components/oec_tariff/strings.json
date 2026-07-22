@@ -14,6 +14,14 @@
         "data": {
           "tariff": "Tariff"
         }
+      },
+      "demand": {
+        "title": "Demand tracking (optional)",
+        "description": "Optionally configure demand charge tracking. Select a power sensor that measures your grid import in kW or W. Leave blank to skip.",
+        "data": {
+          "power_entity": "Grid power sensor",
+          "billing_day": "Billing cycle start day (1-28)"
+        }
       }
     },
     "error": {

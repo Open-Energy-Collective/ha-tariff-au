@@ -18,7 +18,8 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up OEC Tariff sensors from a config entry."""
-    coordinator: OecTariffCoordinator = hass.data[DOMAIN][entry.entry_id]
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator: OecTariffCoordinator = data["coordinator"]
 
     entities = [
         OecCurrentRateSensor(coordinator, entry),
@@ -28,6 +29,13 @@ async def async_setup_entry(
         OecTariffNameSensor(coordinator, entry),
     ]
     async_add_entities(entities)
+
+    # Set up demand tracking sensors if power entity configured
+    from .demand_sensors import async_setup_demand_sensors
+
+    tracker = await async_setup_demand_sensors(hass, entry, coordinator, async_add_entities)
+    if tracker:
+        data["demand_tracker"] = tracker
 
 
 class OecBaseSensor(CoordinatorEntity, SensorEntity):

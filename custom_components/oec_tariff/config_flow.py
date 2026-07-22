@@ -7,7 +7,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import CONF_API_URL, CONF_DNSP, CONF_TARIFF, DEFAULT_API_URL, DOMAIN
+from .const import CONF_API_URL, CONF_BILLING_DAY, CONF_DNSP, CONF_POWER_ENTITY, CONF_TARIFF, DEFAULT_API_URL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._dnsps: list[dict] = []
         self._tariffs: list[dict] = []
         self._selected_dnsp: str = ""
+        self._selected_tariff: str = ""
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step — select DNSP."""
@@ -68,20 +69,8 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            # Create the config entry
-            await self.async_set_unique_id(
-                f"{self._selected_dnsp}_{user_input[CONF_TARIFF]}"
-            )
-            self._abort_if_unique_id_configured()
-
-            return self.async_create_entry(
-                title=f"{self._selected_dnsp}/{user_input[CONF_TARIFF]}",
-                data={
-                    CONF_DNSP: self._selected_dnsp,
-                    CONF_TARIFF: user_input[CONF_TARIFF],
-                    CONF_API_URL: DEFAULT_API_URL,
-                },
-            )
+            self._selected_tariff = user_input[CONF_TARIFF]
+            return await self.async_step_demand()
 
         # Fetch tariffs for selected DNSP
         session = async_get_clientsession(self.hass)
@@ -113,4 +102,45 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {vol.Required(CONF_TARIFF): vol.In(tariff_options)}
             ),
             errors=errors,
+        )
+
+    async def async_step_demand(self, user_input=None):
+        """Handle optional demand tracking configuration."""
+        from homeassistant.helpers import selector
+
+        if user_input is not None:
+            # Create the config entry
+            await self.async_set_unique_id(
+                f"{self._selected_dnsp}_{self._selected_tariff}"
+            )
+            self._abort_if_unique_id_configured()
+
+            data = {
+                CONF_DNSP: self._selected_dnsp,
+                CONF_TARIFF: self._selected_tariff,
+                CONF_API_URL: DEFAULT_API_URL,
+            }
+            if user_input.get(CONF_POWER_ENTITY):
+                data[CONF_POWER_ENTITY] = user_input[CONF_POWER_ENTITY]
+                data[CONF_BILLING_DAY] = user_input.get(CONF_BILLING_DAY, 1)
+
+            return self.async_create_entry(
+                title=f"{self._selected_dnsp}/{self._selected_tariff}",
+                data=data,
+            )
+
+        return self.async_show_form(
+            step_id="demand",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_POWER_ENTITY): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            device_class="power",
+                        )
+                    ),
+                    vol.Optional(CONF_BILLING_DAY, default=1): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=28)
+                    ),
+                }
+            ),
         )

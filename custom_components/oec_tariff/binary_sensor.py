@@ -16,7 +16,8 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up OEC Tariff binary sensors from a config entry."""
-    coordinator: OecTariffCoordinator = hass.data[DOMAIN][entry.entry_id]
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator: OecTariffCoordinator = data["coordinator"]
     async_add_entities([OecInDemandWindowSensor(coordinator, entry)])
 
 
@@ -27,7 +28,7 @@ class OecInDemandWindowSensor(CoordinatorEntity, BinarySensorEntity):
         """Initialize."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_in_demand_window"
-        self._attr_name = "In Demand Window"
+        self._attr_name = "Demand Window"
         self._attr_device_class = None
         self._attr_icon = "mdi:flash-alert"
         self._attr_device_info = {

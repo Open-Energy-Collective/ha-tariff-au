@@ -20,12 +20,24 @@
         "description": "Optionally configure demand charge tracking. Select a power sensor that measures your grid import in kW or W. Leave blank to skip.",
         "data": {
           "power_entity": "Grid power sensor",
-          "billing_day": "Billing cycle start day (1-28)"
+          "billing_day": "Billing cycle start day"
         }
       }
     },
     "error": {
-      "cannot_connect": "Unable to connect to OEC Tariff API"
+      "cannot_connect": "Unable to connect to Tariff Data Service API"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Reconfigure demand tracking",
+        "description": "Change your power sensor or billing cycle day. Leave power sensor blank to disable demand tracking.",
+        "data": {
+          "power_entity": "Grid power sensor",
+          "billing_day": "Billing cycle start day"
+        }
+      }
     }
   }
 }

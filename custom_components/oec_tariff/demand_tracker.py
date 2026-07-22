@@ -14,6 +14,37 @@ _LOGGER = logging.getLogger(__name__)
 SAMPLE_INTERVAL = timedelta(seconds=30)
 
 
+def is_in_demand_window(
+    now: datetime,
+    window_start: time,
+    window_end: time,
+    days: str,
+    season_months: list[int] | None,
+) -> bool:
+    """Check if a given datetime falls within a demand measurement window."""
+    current_time = now.time()
+    weekday = now.weekday()
+    month = now.month
+
+    # Day check
+    if days == "weekdays" and weekday >= 5:
+        return False
+    if days == "weekends" and weekday < 5:
+        return False
+
+    # Season check
+    if season_months and month not in season_months:
+        return False
+
+    # Time check (handle overnight windows)
+    if window_start == window_end == time(0, 0):
+        return True  # 00:00 to 00:00 means "any time"
+    if window_start <= window_end:
+        return window_start <= current_time < window_end
+    else:
+        return current_time >= window_start or current_time < window_end
+
+
 class DemandTracker:
     """Tracks peak demand based on DNSP measurement methodology."""
 
@@ -57,27 +88,9 @@ class DemandTracker:
 
     def _is_in_demand_window(self, now: datetime) -> bool:
         """Check if current datetime is within the demand measurement window."""
-        current_time = now.time()
-        weekday = now.weekday()
-        month = now.month
-
-        # Day check
-        if self.days == "weekdays" and weekday >= 5:
-            return False
-        if self.days == "weekends" and weekday < 5:
-            return False
-
-        # Season check
-        if self.season_months and month not in self.season_months:
-            return False
-
-        # Time check (handle overnight windows)
-        if self.window_start == self.window_end == time(0, 0):
-            return True  # 00:00 to 00:00 means "any time"
-        if self.window_start <= self.window_end:
-            return self.window_start <= current_time < self.window_end
-        else:
-            return current_time >= self.window_start or current_time < self.window_end
+        return is_in_demand_window(
+            now, self.window_start, self.window_end, self.days, self.season_months
+        )
 
     def _get_block_start(self, now: datetime) -> datetime:
         """Get the start of the current clock-aligned 30-min block."""

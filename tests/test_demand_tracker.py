@@ -2,7 +2,7 @@
 
 from datetime import datetime, time, timedelta, timezone
 
-from custom_components.oec_tariff.demand_tracker import DemandTracker, is_in_demand_window
+from custom_components.oec_tariff_au.demand_tracker import DemandTracker, is_in_demand_window
 
 AEST = timezone(timedelta(hours=10))
 UTC = timezone.utc
@@ -103,7 +103,7 @@ def test_async_sample_uses_local_time_not_utc(monkeypatch):
     (06:30) falls outside 16:00-20:00. Before the as_local() fix, the sample
     was silently dropped instead of updating the peak.
     """
-    from custom_components.oec_tariff import demand_tracker as demand_tracker_module
+    from custom_components.oec_tariff_au import demand_tracker as demand_tracker_module
 
     monkeypatch.setattr(demand_tracker_module.dt_util, "as_local", lambda d: d.astimezone(AEST))
 
@@ -128,7 +128,7 @@ def test_async_sample_uses_local_time_not_utc(monkeypatch):
 
 def test_async_sample_out_of_window_by_local_clock_is_ignored(monkeypatch):
     """Same instant, but outside the window once correctly localized."""
-    from custom_components.oec_tariff import demand_tracker as demand_tracker_module
+    from custom_components.oec_tariff_au import demand_tracker as demand_tracker_module
 
     monkeypatch.setattr(demand_tracker_module.dt_util, "as_local", lambda d: d.astimezone(AEST))
 

@@ -1,5 +1,5 @@
 [project]
-name = "integration_hass_oec-tariff"
+name = "integration_hass_oec-tariff-au"
 version = "0.1.0"
 description = "Home Assistant integration for OEC Tariff Data Service"
 readme = "README.md"

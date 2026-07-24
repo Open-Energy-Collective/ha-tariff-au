@@ -1,8 +1,8 @@
 # Home Assistant Integration Development Rules
 
 ## Naming Convention
-- Repo: `integration_{platform}_{name}` (e.g., `integration_hass_oec-tariff`)
-- HA domain: `oec_tariff` (underscores, no hyphens)
+- Repo: `integration_{platform}_{name}` (e.g., `integration_hass_oec-tariff-au`)
+- HA domain: `oec_tariff_au` (underscores, no hyphens)
 - Entity prefix: derived from domain (HA handles this automatically)
 - Friendly names: NO "OEC" prefix — use descriptive names only (e.g., "Current Rate", "Demand Window")
 - Device name: `Tariff ({dnsp}/{tariff})` — contextual, not branded
@@ -84,10 +84,10 @@ tests/
 3. Don't commit broken tests "to fix later"
 
 ## Deployment to HA
-1. Develop in `/home/zed/projects/OEC/repos/integration_hass_oec-tariff/`
+1. Develop in `/home/zed/projects/OEC/repos/integration_hass_oec-tariff-au/`
 2. Run tests: `.venv/bin/python -m pytest tests/ -v` — must all pass
-3. Rsync to `~/hass/Home_Assistant/custom_components/oec_tariff/`
-4. Force-add new files: `git add -f custom_components/oec_tariff/` (HA `.gitignore` has `*.*`)
+3. Rsync to `~/hass/Home_Assistant/custom_components/oec_tariff_au/`
+4. Force-add new files: `git add -f custom_components/oec_tariff_au/` (HA `.gitignore` has `*.*`)
 5. Commit and push HA repo
 6. Git pull on HA device, restart
 7. Delete and re-add integration when config structure changes

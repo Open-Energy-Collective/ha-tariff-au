@@ -1,6 +1,6 @@
 """Constants for OEC Tariff integration."""
 
-DOMAIN = "oec_tariff"
+DOMAIN = "oec_tariff_au"
 DEFAULT_API_URL = "https://api.openenergy.org.au/api/v1"
 DEFAULT_SCAN_INTERVAL = 300  # seconds
 

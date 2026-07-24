@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from custom_components.oec_tariff.binary_sensor import OecInDemandWindowSensor
+from custom_components.oec_tariff_au.binary_sensor import OecInDemandWindowSensor
 
 AEST = timezone(timedelta(hours=10))
 

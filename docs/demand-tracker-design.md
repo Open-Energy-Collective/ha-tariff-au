@@ -89,9 +89,9 @@ Blocks align to clock half-hours (XX:00 and XX:30), not from when the integratio
 
 | Entity | Unit | Description |
 |--------|------|-------------|
-| `sensor.oec_tariff_month_peak_demand` | kW | Highest measured demand this billing month |
-| `sensor.oec_tariff_monthly_demand_charge` | $ | peak_kW × demand_rate (from API) |
-| `sensor.oec_tariff_demand_surcharge_per_kwh` | $/kWh | Amortized demand charge (from API) |
+| `sensor.oec_tariff_au_month_peak_demand` | kW | Highest measured demand this billing month |
+| `sensor.oec_tariff_au_monthly_demand_charge` | $ | peak_kW × demand_rate (from API) |
+| `sensor.oec_tariff_au_demand_surcharge_per_kwh` | $/kWh | Amortized demand charge (from API) |
 
 ### Attributes on `month_peak_demand`:
 - `measurement_method`: which method is being used

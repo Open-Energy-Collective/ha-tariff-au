@@ -1,4 +1,4 @@
-# OEC Tariff — Home Assistant Integration
+# OEC - Tariff AU — Home Assistant Integration
 
 Real-time Australian network tariff data in Home Assistant, powered by the [Tariff Data Service](https://api.openenergy.org.au/docs).
 
@@ -21,15 +21,15 @@ All DNSPs served by the Tariff Data Service (currently 9 across NSW, VIC, QLD, S
 ### HACS (recommended)
 
 1. Add this repository as a custom repository in HACS
-2. Install "OEC Tariff"
+2. Install "OEC - Tariff AU"
 3. Restart Home Assistant
-4. Go to Settings → Integrations → Add Integration → "OEC Tariff"
+4. Go to Settings → Integrations → Add Integration → "OEC - Tariff AU"
 5. Select your DNSP and tariff code
 6. Optionally configure demand tracking (select power sensor + billing day)
 
 ### Manual
 
-Copy `custom_components/oec_tariff/` to your HA config directory.
+Copy `custom_components/oec_tariff_au/` to your HA config directory.
 
 ## Configuration
 

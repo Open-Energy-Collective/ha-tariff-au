@@ -206,11 +206,15 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
         # Calculate window hours per month
         start = self._tracker.window_start
         end = self._tracker.window_end
-        if start <= end:
+        if start == end:
+            # "Applies at all other times" convention (e.g. Jemena/AusNet
+            # all-day demand windows) — the full day.
+            hours_per_day = 24.0
+        elif start <= end:
             hours_per_day = (end.hour + end.minute / 60) - (start.hour + start.minute / 60)
         else:
             hours_per_day = (24 - start.hour - start.minute / 60) + (end.hour + end.minute / 60)
 
         window_hours_per_month = hours_per_day * 30
         monthly_charge = peak_kw * demand["rate"]
-        return round(monthly_charge / (peak_kw * window_hours_per_month), 5)
+        return round(monthly_charge / window_hours_per_month, 5)

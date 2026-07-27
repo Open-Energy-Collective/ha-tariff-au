@@ -25,9 +25,10 @@ async def async_setup_entry(
         OecCurrentRateSensor(coordinator, entry),
         OecCurrentPeriodSensor(coordinator, entry),
         OecDailySupplyChargeSensor(coordinator, entry),
-        OecDemandRateSensor(coordinator, entry),
         OecTariffNameSensor(coordinator, entry),
     ]
+    if coordinator.tariff_detail and coordinator.tariff_detail.get("demand"):
+        entities.append(OecDemandRateSensor(coordinator, entry))
     async_add_entities(entities)
 
     # Set up demand tracking sensors if power entity configured

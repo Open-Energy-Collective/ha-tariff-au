@@ -26,7 +26,8 @@ async def async_setup_entry(
     """Set up OEC Tariff binary sensors from a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: OecTariffCoordinator = data["coordinator"]
-    async_add_entities([OecInDemandWindowSensor(coordinator, entry)])
+    if coordinator.tariff_detail and coordinator.tariff_detail.get("demand"):
+        async_add_entities([OecInDemandWindowSensor(coordinator, entry)])
 
 
 class OecInDemandWindowSensor(CoordinatorEntity, BinarySensorEntity):

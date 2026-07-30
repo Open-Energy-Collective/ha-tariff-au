@@ -172,10 +172,16 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
     An enum sensor's `options` render as a fixed dropdown in the automation
     state trigger/condition UI, so "active"/"inactive" can be picked
     directly without a custom value.
+
+    The stored/matched value is lowercase ("active"/"inactive" — the HA
+    enum-sensor convention for machine values); `translation_key` maps that
+    to "Active"/"Inactive" for display, via the `entity.sensor` block in
+    strings.json.
     """
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["active", "inactive"]
+    _attr_translation_key = "demand_window_status"
 
     def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""

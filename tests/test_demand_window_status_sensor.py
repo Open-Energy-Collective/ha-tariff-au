@@ -25,7 +25,7 @@ def make_scheduler(window_start, window_end, days="all", season_months=None):
     return scheduler
 
 
-# --- Pure logic: transition search (shared with the binary sensor) ---------
+# --- Pure logic: transition search ------------------------------------------
 
 
 def test_finds_window_start_today():

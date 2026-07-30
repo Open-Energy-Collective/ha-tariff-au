@@ -169,10 +169,9 @@ class OecDemandRateSensor(OecBaseSensor):
 class OecDemandWindowStatusSensor(OecBaseSensor):
     """Enum sensor for demand window status (active/inactive).
 
-    Unlike the `Demand Window` binary sensor, an enum sensor's `options`
-    render as a fixed dropdown in the automation state trigger/condition UI,
-    so "active"/"inactive" can be picked directly rather than relying on the
-    binary sensor's on/off domain.
+    An enum sensor's `options` render as a fixed dropdown in the automation
+    state trigger/condition UI, so "active"/"inactive" can be picked
+    directly without a custom value.
     """
 
     _attr_device_class = SensorDeviceClass.ENUM

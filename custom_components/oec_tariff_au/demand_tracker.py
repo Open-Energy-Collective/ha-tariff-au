@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, time, timedelta
 
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_point_in_time, async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
@@ -13,6 +13,9 @@ from .const import CONF_BILLING_DAY, DEFAULT_BILLING_DAY
 _LOGGER = logging.getLogger(__name__)
 
 SAMPLE_INTERVAL = timedelta(seconds=30)
+
+# How far ahead to search for the next demand-window transition.
+_SEARCH_HORIZON_DAYS = 400
 
 
 def is_in_demand_window(
@@ -44,6 +47,96 @@ def is_in_demand_window(
         return window_start <= current_time < window_end
     else:
         return current_time >= window_start or current_time < window_end
+
+
+class DemandWindowScheduler:
+    """Tracks demand-window active/inactive status.
+
+    Computes the window locally and schedules a callback at the exact
+    transition instant, rather than relying on the coordinator's poll
+    cadence (which is not clock-aligned and can lag the true boundary
+    by up to its full update interval).
+    """
+
+    def __init__(self, hass: HomeAssistant, on_transition) -> None:
+        """Initialize."""
+        self.hass = hass
+        self._on_transition = on_transition
+        self.window_start: time | None = None
+        self.window_end: time | None = None
+        self.days: str | None = None
+        self.season_months: list[int] | None = None
+        self.is_active: bool | None = None
+        self._unsub_next_transition = None
+
+    def _load_window_config(self, demand: dict) -> bool:
+        """Parse demand window config. Returns True if present."""
+        if not demand:
+            return False
+        parts_start = demand["window_start"].split(":")
+        parts_end = demand["window_end"].split(":")
+        self.window_start = time(int(parts_start[0]), int(parts_start[1]))
+        self.window_end = time(int(parts_end[0]), int(parts_end[1]))
+        self.days = demand["days"]
+        self.season_months = demand.get("season_months")
+        return True
+
+    def status_at(self, when: datetime) -> bool:
+        """Return whether `when` is inside the demand window."""
+        return is_in_demand_window(when, self.window_start, self.window_end, self.days, self.season_months)
+
+    def _find_next_transition(self, now: datetime) -> datetime | None:
+        """Find the exact instant the window status next flips, searching forward."""
+        current_status = self.status_at(now)
+        daily_boundaries = sorted({time(0, 0), self.window_start, self.window_end})
+
+        for day_offset in range(_SEARCH_HORIZON_DAYS):
+            day = (now + timedelta(days=day_offset)).date()
+            for boundary in daily_boundaries:
+                candidate = datetime.combine(day, boundary, tzinfo=now.tzinfo)
+                if candidate <= now:
+                    continue
+                if self.status_at(candidate) != current_status:
+                    return candidate
+        return None
+
+    @callback
+    def schedule_next_transition(self) -> None:
+        """Schedule a callback at the exact next window transition instant."""
+        if self._unsub_next_transition:
+            self._unsub_next_transition()
+            self._unsub_next_transition = None
+
+        if self.window_start is None:
+            return
+
+        now = dt_util.now()
+        next_transition = self._find_next_transition(now)
+        if next_transition is None:
+            return
+
+        self._unsub_next_transition = async_track_point_in_time(
+            self.hass, self._async_handle_transition, next_transition
+        )
+
+    @callback
+    def _async_handle_transition(self, now: datetime) -> None:
+        """Handle the exact-instant window transition."""
+        self.is_active = self.status_at(now)
+        self._on_transition(self.is_active)
+        self.schedule_next_transition()
+
+    def start(self, demand: dict) -> None:
+        """Load window config and start scheduling transitions."""
+        if self._load_window_config(demand):
+            self.is_active = self.status_at(dt_util.now())
+            self.schedule_next_transition()
+
+    def stop(self) -> None:
+        """Cancel any pending scheduled transition."""
+        if self._unsub_next_transition:
+            self._unsub_next_transition()
+            self._unsub_next_transition = None
 
 
 class DemandTracker:

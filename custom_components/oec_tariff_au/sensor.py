@@ -6,12 +6,13 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import OecTariffCoordinator
+from .demand_tracker import DemandWindowScheduler
 
 
 async def async_setup_entry(
@@ -29,6 +30,7 @@ async def async_setup_entry(
     ]
     if coordinator.tariff_detail and coordinator.tariff_detail.get("demand"):
         entities.append(OecDemandRateSensor(coordinator, entry))
+        entities.append(OecDemandWindowStatusSensor(coordinator, entry))
     async_add_entities(entities)
 
     # Set up demand tracking sensors if power entity configured
@@ -162,6 +164,57 @@ class OecDemandRateSensor(OecBaseSensor):
                     "season_months": demand.get("season_months"),
                 }
         return {}
+
+
+class OecDemandWindowStatusSensor(OecBaseSensor):
+    """Enum sensor for demand window status (active/inactive).
+
+    An enum sensor's `options` render as a fixed dropdown in the automation
+    state trigger/condition UI, so "active"/"inactive" can be picked
+    directly without a custom value.
+
+    The stored/matched value is lowercase ("active"/"inactive" — the HA
+    enum-sensor convention for machine values); `translation_key` maps that
+    to "Active"/"Inactive" for display, via the `entity.sensor` block in
+    strings.json.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["active", "inactive"]
+    _attr_translation_key = "demand_window_status"
+
+    def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
+        """Initialize."""
+        super().__init__(coordinator, entry, "demand_window_status")
+        self._attr_name = "Demand Window Status"
+        self._attr_icon = "mdi:flash-alert"
+        self._scheduler: DemandWindowScheduler | None = None
+
+    @callback
+    def _handle_transition(self, is_active: bool) -> None:
+        """Write updated state when the window transitions."""
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        """Start tracking the window boundary once added."""
+        await super().async_added_to_hass()
+        self._scheduler = DemandWindowScheduler(self.hass, self._handle_transition)
+        detail = self.coordinator.tariff_detail
+        demand = detail.get("demand") if detail else None
+        if demand:
+            self._scheduler.start(demand)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel any pending scheduled transition."""
+        if self._scheduler:
+            self._scheduler.stop()
+
+    @property
+    def native_value(self) -> str | None:
+        """Return "active" or "inactive"."""
+        if self._scheduler is None or self._scheduler.is_active is None:
+            return None
+        return "active" if self._scheduler.is_active else "inactive"
 
 
 class OecTariffNameSensor(OecBaseSensor):

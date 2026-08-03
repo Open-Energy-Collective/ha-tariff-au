@@ -39,5 +39,15 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "demand_window_status": {
+        "state": {
+          "active": "Active",
+          "inactive": "Inactive"
+        }
+      }
+    }
   }
 }

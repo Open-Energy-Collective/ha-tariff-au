@@ -8,9 +8,8 @@ what happens if someone configures 50 tariffs?
 **Verified (not hypothetical):**
 - `tariff-service` genuinely rate-limits: live request against
   `api.openenergy.org.au` returned `x-ratelimit-limit: 20`, `retry-after: 60`.
-  Middleware is `slowapi`, keyed by **remote IP** (`get_remote_address`,
-  the API's own rate-limiting middleware) — the budget is shared per source
-  IP, not per-tariff, per-entry, or per-API-key.
+  Middleware is `slowapi`, keyed by **remote IP** (`get_remote_address`) — the
+  budget is shared per source IP, not per-tariff, per-entry, or per-API-key.
 - `custom_components/oec_tariff_au/coordinator.py`: one `DataUpdateCoordinator`
   per configured DNSP+tariff, each polling independently every 300s
   (`DEFAULT_SCAN_INTERVAL`), with no shared client-side limiter/queue across

@@ -101,5 +101,5 @@ tests/
 - Single integration per repo
 
 ## Third-Party IP & License Compliance
-Org-wide rules, not repeated here — see [internal doc], which links to
-[internal doc].
+Before adding any dependency: verify it declares an approved license (MIT, Apache-2.0,
+BSD-2/3-Clause, ISC, LGPL). Anything else, unclear, or missing — stop and ask.

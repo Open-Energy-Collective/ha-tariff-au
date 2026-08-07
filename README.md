@@ -1,4 +1,5 @@
-# OEC Tariff - AU — Home Assistant Integration
+# OEC Tariff - AU
+# Home Assistant Integration
 
 Real-time Australian network tariff data in Home Assistant, powered by the [Tariff Data Service](https://api.openenergy.org.au/docs).
 

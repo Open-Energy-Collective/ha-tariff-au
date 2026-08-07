@@ -15,7 +15,7 @@ Real-time Australian network tariff data in Home Assistant, powered by the [Tari
 
 ## Supported DNSPs
 
-All DNSPs served by the Tariff Data Service (currently 9 across NSW, VIC, QLD, SA, ACT, NT).
+All DNSPs served by the Tariff Data Service (currently 12 across NSW, VIC, QLD, SA, ACT, NT).
 
 ## Installation
 

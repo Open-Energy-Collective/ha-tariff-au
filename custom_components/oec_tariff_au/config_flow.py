@@ -82,7 +82,9 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             self._selected_tariff = user_input[CONF_TARIFF]
-            return await self.async_step_demand()
+            if await self._tariff_has_demand_component():
+                return await self.async_step_demand()
+            return await self._async_finish_entry()
 
         # Fetch tariffs for selected DNSP
         session = async_get_clientsession(self.hass)
@@ -116,29 +118,62 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def _tariff_has_demand_component(self) -> bool:
+        """Check whether the selected tariff has a demand-charge component.
+
+        The tariff *list* endpoint (used by async_step_tariff's own form)
+        deliberately only returns summary fields (code/name/tariff_type) --
+        `demand` is only present on the per-tariff detail endpoint. Fetch it
+        here so the demand-tracking step can be skipped entirely for
+        tariffs that have no demand component (e.g. flat/ToU-only tariffs),
+        instead of always asking for an optional power sensor that would
+        never actually do anything.
+        """
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.get(
+                f"{DEFAULT_API_URL}/tariffs/{self._selected_dnsp}/{self._selected_tariff}",
+                timeout=10,
+            ) as resp:
+                if resp.status == 200:
+                    detail = await resp.json()
+                    return bool(detail.get("demand"))
+        except (aiohttp.ClientError, TimeoutError):
+            pass
+        # If the check itself fails (network hiccup, etc.), fail open --
+        # show the demand step rather than silently skip setup for a
+        # tariff that might genuinely have a demand component.
+        return True
+
+    async def _async_finish_entry(self, power_entity=None, billing_day=None):
+        """Create the config entry."""
+        await self.async_set_unique_id(
+            f"{self._selected_dnsp}_{self._selected_tariff}"
+        )
+        self._abort_if_unique_id_configured()
+
+        data = {
+            CONF_DNSP: self._selected_dnsp,
+            CONF_TARIFF: self._selected_tariff,
+            CONF_API_URL: DEFAULT_API_URL,
+        }
+        if power_entity:
+            data[CONF_POWER_ENTITY] = power_entity
+            data[CONF_BILLING_DAY] = billing_day or DEFAULT_BILLING_DAY
+
+        return self.async_create_entry(
+            title=f"{self._selected_dnsp}/{self._selected_tariff}",
+            data=data,
+        )
+
     async def async_step_demand(self, user_input=None):
         """Handle optional demand tracking configuration."""
         from homeassistant.helpers import selector
 
         if user_input is not None:
-            # Create the config entry
-            await self.async_set_unique_id(
-                f"{self._selected_dnsp}_{self._selected_tariff}"
-            )
-            self._abort_if_unique_id_configured()
-
-            data = {
-                CONF_DNSP: self._selected_dnsp,
-                CONF_TARIFF: self._selected_tariff,
-                CONF_API_URL: DEFAULT_API_URL,
-            }
-            if user_input.get(CONF_POWER_ENTITY):
-                data[CONF_POWER_ENTITY] = user_input[CONF_POWER_ENTITY]
-                data[CONF_BILLING_DAY] = user_input.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY)
-
-            return self.async_create_entry(
-                title=f"{self._selected_dnsp}/{self._selected_tariff}",
-                data=data,
+            return await self._async_finish_entry(
+                user_input.get(CONF_POWER_ENTITY),
+                user_input.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY),
             )
 
         return self.async_show_form(

@@ -181,12 +181,12 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["active", "inactive"]
-    _attr_translation_key = "demand_window_status"
+    _attr_translation_key = "demand_window"
 
     def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
-        super().__init__(coordinator, entry, "demand_window_status")
-        self._attr_name = "Demand Window Status"
+        super().__init__(coordinator, entry, "demand_window")
+        self._attr_name = "Demand Window"
         self._attr_icon = "mdi:flash-alert"
         self._scheduler: DemandWindowScheduler | None = None
 

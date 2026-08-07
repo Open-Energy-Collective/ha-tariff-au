@@ -58,7 +58,7 @@ Entity IDs follow the pattern `sensor.tariff_{dnsp}_{tariff}_{name}`. For exampl
 | `sensor.tariff_energex_3900_daily_supply_charge` | $/day | Fixed daily network charge |
 | `sensor.tariff_energex_3900_demand_rate` | $/kW/month | Demand charge rate |
 | `sensor.tariff_energex_3900_tariff_name` | — | Human-readable tariff name |
-| `binary_sensor.tariff_energex_3900_demand_window` | Active/Inactive | Whether demand is being measured |
+| `sensor.tariff_energex_3900_demand_window` | Active/Inactive | Whether demand is being measured |
 
 ### Demand Tracking Sensors (if power entity configured)
 
@@ -89,7 +89,7 @@ automation:
   - alias: "Pause EV charging during demand window"
     trigger:
       - platform: state
-        entity_id: binary_sensor.tariff_energex_3900_demand_window
+        entity_id: sensor.tariff_energex_3900_demand_window
         to: "Active"
     action:
       - service: switch.turn_off

@@ -103,3 +103,11 @@ tests/
 ## Third-Party IP & License Compliance
 Before adding any dependency: verify it declares an approved license (MIT, Apache-2.0,
 BSD-2/3-Clause, ISC, LGPL). Anything else, unclear, or missing — stop and ask.
+
+## Security / PII scan before any release or HACS submission
+This repo is real and public (`github.com/Open-Energy-Collective/ha-tariff-au`) — run
+`../.agent/scripts/security-scan.sh ha-tariff-au` before cutting a release or touching
+anything HACS-submission-related. Process/checklist: `repos/.agent/security-scan.md`,
+including its "Recording a finding without republishing it" section — never write an
+exact leaked value or exact commit hash into this repo's own status.md/commit
+messages, even when documenting a fix.

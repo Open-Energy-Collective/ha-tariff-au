@@ -1,5 +1,22 @@
 # Build Session Status Log
 
+## 2026-08-10 — Security/PII scan pass: working tree clean, one historical finding accepted as-is
+
+**Cross-repo security pass** (`repos/.agent/security-scan.md`, new repeatable
+process this session; this repo's own 2026-08-07 fix was the precedent it's built
+from). Current working tree and `HEAD` confirmed clean of real IPs/paths/tokens.
+
+One older finding exists further back in this repo's git history (predates the
+2026-08-07 fix) — deliberately **not detailed here** (see
+`repos/.agent/security-scan.md`'s "Recording a finding without republishing it"
+section: naming the exact commit/value in a file committed to this repo would
+publish a pointer to it, which is worse than the finding itself). Discussed
+directly with the repo owner, who accepted it as low-severity and chose not to
+rewrite published history over it — HACS installs are unaffected regardless
+(HACS installs from a tagged release zipball, not a `git clone`, so history
+content was never reachable through that path). Decision recorded here for
+continuity; specifics live outside this repo.
+
 ## 2026-08-07 — Finding: no graceful handling of server-side rate limiting; gets worse at scale, not just per-household
 
 **Trigger:** user question — does the integration handle rate limiting gracefully, and

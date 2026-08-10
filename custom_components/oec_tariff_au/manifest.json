@@ -1,6 +1,6 @@
 {
   "domain": "oec_tariff_au",
-  "name": "OEC Tariff - AU",
+  "name": "OEC Tariff (AU)",
   "codeowners": ["@Open-Energy-Collective"],
   "config_flow": true,
   "documentation": "https://github.com/Open-Energy-Collective/ha-tariff-au",

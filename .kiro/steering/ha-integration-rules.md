@@ -1,1 +1,0 @@
-../../.agent/ha-integration-rules.md

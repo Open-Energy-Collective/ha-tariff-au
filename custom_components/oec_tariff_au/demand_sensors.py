@@ -80,6 +80,11 @@ class OecDemandBaseSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
             "model": "Network Tariff",
         }
 
+    def _demand_recorded_at_iso(self) -> str | None:
+        """ISO timestamp of when the chargeable peak was recorded, if known."""
+        recorded_at = self._tracker.chargeable_demand_recorded_at
+        return recorded_at.isoformat() if recorded_at else None
+
 
 class OecMonthPeakDemandSensor(OecDemandBaseSensor):
     """Month-to-date peak demand sensor."""
@@ -127,6 +132,7 @@ class OecMonthPeakDemandSensor(OecDemandBaseSensor):
             "previous_month_peak": self._tracker.previous_month_peak_kw,
             "current_block_samples": len(self._tracker.current_block_samples),
             "power_entity": self._tracker.power_entity_id,
+            "demand_recorded_at": self._demand_recorded_at_iso(),
         }
 
     @property
@@ -170,6 +176,11 @@ class OecMonthlyDemandChargeSensor(OecDemandBaseSensor):
             if demand:
                 return round(self._tracker.chargeable_demand * demand["rate"], 2)
         return None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return tracking metadata."""
+        return {"demand_recorded_at": self._demand_recorded_at_iso()}
 
 
 class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
@@ -216,3 +227,8 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
         window_hours_per_month = hours_per_day * 30
         monthly_charge = peak_kw * demand["rate"]
         return round(monthly_charge / window_hours_per_month, 5)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return tracking metadata."""
+        return {"demand_recorded_at": self._demand_recorded_at_iso()}

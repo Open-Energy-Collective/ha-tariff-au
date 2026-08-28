@@ -2,6 +2,8 @@
 amortization formula.
 """
 
+from datetime import datetime
+
 from homeassistant.core import State
 from pytest_homeassistant_custom_component.common import mock_restore_cache_with_extra_data
 
@@ -230,7 +232,10 @@ async def test_month_peak_sensor_restores_saved_tracker_state_on_startup(hass):
     try:
         assert tracker.month_peak_kw == 6.75
         assert tracker.previous_month_peak_kw == 5.5
-        assert tracker.monthly_peaks_12 == [5.5, 6.0]
+        # Legacy saved blob (pre-demand_recorded_at): plain floats, no
+        # per-entry timestamp -- restore_state() should migrate this to the
+        # (value, None) tuple shape rather than fail.
+        assert tracker.monthly_peaks_12 == [(5.5, None), (6.0, None)]
     finally:
         await sensor.async_will_remove_from_hass()
 
@@ -267,3 +272,43 @@ def test_month_peak_sensor_extra_restore_state_data_round_trips_tracker_save_sta
     sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
 
     assert sensor.extra_restore_state_data.as_dict() == tracker.save_state()
+
+
+# --- demand_recorded_at exposed via extra_state_attributes ------------------
+
+
+def test_month_peak_sensor_exposes_demand_recorded_at():
+    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
+    coordinator = FakeCoordinator(demand=demand)
+    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
+    tracker.month_peak_recorded_at = datetime(2026, 7, 22, 17, 0)
+    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
+
+    assert sensor.extra_state_attributes["demand_recorded_at"] == "2026-07-22T17:00:00"
+
+
+def test_month_peak_sensor_demand_recorded_at_none_when_unset():
+    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
+    coordinator = FakeCoordinator(demand=demand)
+    tracker = make_tracker("16:00", "21:00", month_peak_kw=0.0)
+    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
+
+    assert sensor.extra_state_attributes["demand_recorded_at"] is None
+
+
+def test_monthly_demand_charge_sensor_exposes_demand_recorded_at():
+    coordinator = FakeCoordinator(demand={"rate": 7.434})
+    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
+    tracker.month_peak_recorded_at = datetime(2026, 7, 22, 17, 0)
+    sensor = OecMonthlyDemandChargeSensor(coordinator, FakeEntry(), tracker)
+
+    assert sensor.extra_state_attributes == {"demand_recorded_at": "2026-07-22T17:00:00"}
+
+
+def test_demand_surcharge_per_kwh_sensor_exposes_demand_recorded_at():
+    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
+    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
+    tracker.month_peak_recorded_at = datetime(2026, 7, 22, 17, 0)
+    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
+
+    assert sensor.extra_state_attributes == {"demand_recorded_at": "2026-07-22T17:00:00"}

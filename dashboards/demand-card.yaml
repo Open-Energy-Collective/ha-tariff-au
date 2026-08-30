@@ -1,44 +1,48 @@
 # Demand-tracking status card for a single tariff instance.
 #
-# Requires three HACS custom cards (none bundled with this integration --
-# install all separately):
+# Requires two HACS custom cards (none bundled with this integration --
+# install both separately):
 #   - "Mushroom" by piitaya
-#   - "card-mod" (v4) -- CSS layout/coloring via templated `style:` blocks,
-#     no JavaScript involved.
-#   - "vertical-stack-in-card" (github.com/ofekashery/vertical-stack-in-card)
-#     -- despite the name, its `horizontal: true` option merges two
-#     side-by-side cards into what looks like one seamless tile. Needed
-#     because Mushroom's own maintainer has explicitly said template-card
-#     doesn't support right-aligned info by design ("right places are for
-#     controls, not text" --
-#     github.com/piitaya/lovelace-mushroom/discussions/793) -- there's no
-#     card-mod trick that gets a real icon/middle-text/right-value row out
-#     of a single Mushroom card. This sidesteps that by gluing two Mushroom
-#     cards together instead of fighting one.
+#   - "card-mod" (v4) -- CSS layout/coloring via templated `style:` blocks.
+#
+# `vertical-stack-in-card` is NO LONGER needed here (2026-08-30 restyle,
+# matching ha-fleet-connect's dispatch-plan-card.yaml) -- the old design
+# glued two Mushroom cards side by side per row (icon+text on the left,
+# a big color-coded value on the right) because Mushroom's own maintainer
+# has said template-card doesn't support right-aligned info by design
+# ("right places are for controls, not text" --
+# github.com/piitaya/lovelace-mushroom/discussions/793). The new style
+# folds the value into the primary text line instead ("Peak Demand ·
+# 6.5 kW") and uses a colored left accent border for the same at-a-glance
+# signal the right-aligned value used to give, so a single
+# mushroom-template-card per row is enough.
 #
 # Replace `sensor.tariff_ausnet_nasn12_*` below with your own tariff's
 # entity IDs (Settings -> Devices & services -> your tariff device -> the
 # entity list gives you the exact IDs). The title row doesn't need editing
 # -- it reads the device name straight from the registry.
 #
-# Text color uses Mushroom's documented `--card-primary-color` CSS custom
-# property (set via card-mod on `ha-card`) rather than reaching into
-# Mushroom's internal shadow DOM -- that's the supported hook, so it's far
-# less likely to break on a Mushroom version bump than piercing private
-# class names.
+# card_mod: ONLY the plain single-string `style: |` form (a real,
+# selector-wrapped `ha-card { ... }` ruleset -- the same pattern the
+# Demand Window tile below already used successfully) is confirmed
+# working on this install, via an isolated hardcoded test card checked
+# directly in-dashboard. A YAML-mapping `style:` (a `.` key for bare
+# declarations, or a `selector$:` key to pierce into a nested shadow
+# root for text-wrapping) was tried first and confirmed NOT to apply at
+# all here, despite matching card-mod's own documented behavior -- see
+# ha-fleet-connect's dispatch-plan-card.yaml for the full story. `!important`
+# is needed here because Mushroom sets some of these properties itself
+# with its own specificity.
 #
-# The left/right width split is NOT card-mod -- it's vertical-stack-in-card's
-# own `grid_options: columns: N` on each child card (source: its
-# vertical-stack-in-card.js sets `flex: N N 0` per card from that value when
-# `horizontal: true`). columns: 4 vs columns: 1 gives the text side roughly
-# 4x the width of the value side; adjust the ratio to taste. Do not try to
-# size these panes with card-mod's `:host` selector -- that targets the
-# child card's own shadow host from the inside and has no effect on the
-# flex-basis the *parent* stack assigns it (confirmed by testing).
+# Consequence: there is no working text-wrap fix this way, so the
+# secondary line can still get ellipsis-truncated on a long sentence --
+# same known, deliberately deferred gap as the dispatch-plan card.
 #
-# Color thresholds below (peak demand kW, monthly charge $) are just
-# examples -- tune them to whatever counts as "high" for your own tariff's
-# demand rate.
+# Peak Demand and Monthly Demand Charge use a fixed amber accent rather
+# than threshold-based coloring (an earlier draft colored them red/amber/
+# green by value; simplified to a flat amber per feedback). Demand Window
+# keeps its state-based red (active) / green (inactive) coloring since
+# that's a status tile, not a value row.
 
 type: vertical-stack
 cards:
@@ -48,6 +52,8 @@ cards:
 
   # Demand Window -- "DC Solar" tile style: whole-tile background tint
   # reflecting state, icon + primary + secondary stacked normally.
+  # Unchanged by the 2026-08-30 restyle -- this one was never broken and
+  # is a different pattern (a status tile, not a value row).
   - type: custom:mushroom-template-card
     entity: sensor.tariff_ausnet_nasn12_demand_window
     primary: Demand Window
@@ -57,127 +63,82 @@ cards:
     icon: mdi:flash-alert
     icon_color: >-
       {% set window = states('sensor.tariff_ausnet_nasn12_demand_window') %}
-      {% if window == 'active' %}red{% elif window == 'inactive' %}grey{% else %}disabled{% endif %}
+      {% if window == 'active' %}red{% elif window == 'inactive' %}green{% else %}disabled{% endif %}
     tap_action:
       action: more-info
     card_mod:
       style: |
         ha-card {
-          background: {% set window = states('sensor.tariff_ausnet_nasn12_demand_window') -%}
-            {%- if window == 'active' -%}
+          {% set window = states('sensor.tariff_ausnet_nasn12_demand_window') -%}
+          background: {% if window == 'active' -%}
               rgba(244, 67, 54, 0.15)
             {%- elif window == 'inactive' -%}
-              rgba(158, 158, 158, 0.10)
+              rgba(76, 175, 80, 0.10)
             {%- else -%}
               transparent
             {%- endif %};
+          {% if window == 'active' -%}
+          border-left: 4px solid var(--error-color, #f44336) !important;
+          {%- elif window == 'inactive' -%}
+          border-left: 4px solid var(--success-color, #4caf50) !important;
+          {%- endif %}
         }
 
-  # Peak Demand -- two Mushroom cards glued into one row by
-  # vertical-stack-in-card's horizontal mode: left = icon + "Peak Demand" +
-  # full recorded date/time; right = just the color-coded kW value, large
-  # and bold.
-  - type: custom:vertical-stack-in-card
-    horizontal: true
-    cards:
-      - type: custom:mushroom-template-card
-        entity: sensor.tariff_ausnet_nasn12_month_peak_demand
-        layout: horizontal
-        fill_container: true
-        icon: mdi:chart-line-variant
-        icon_color: blue
-        grid_options:
-          columns: 4
-        primary: Peak Demand
-        secondary: >-
-          {% set peak = states('sensor.tariff_ausnet_nasn12_month_peak_demand') %}
-          {% set ts = state_attr('sensor.tariff_ausnet_nasn12_month_peak_demand', 'demand_recorded_at') %}
-          {%- if peak in ['unknown', 'unavailable'] -%}
-            No data yet
-          {%- elif ts -%}
-            {% set dt = ts | as_datetime | as_local %}Recorded {{ dt.strftime('%A %-d %b at %-I:%M') }} {{ dt.strftime('%p') | lower }}
-          {%- else -%}
-            No peak recorded this month
-          {%- endif %}
-        tap_action:
-          action: more-info
-      - type: custom:mushroom-template-card
-        grid_options:
-          columns: 1
-        primary: >-
-          {% set peak = states('sensor.tariff_ausnet_nasn12_month_peak_demand') %}
-          {%- if peak in ['unknown', 'unavailable'] -%}
-            --
-          {%- else -%}
-            {{ peak }} kW
-          {%- endif %}
-        tap_action:
-          action: more-info
-          target:
-            entity_id: sensor.tariff_ausnet_nasn12_month_peak_demand
-        card_mod:
-          style: |
-            ha-card {
-              --card-primary-font-size: 20px;
-              --card-primary-color: {% set peak = states('sensor.tariff_ausnet_nasn12_month_peak_demand') | float(0) -%}
-                {%- if peak > 6 -%}
-                  var(--error-color, #f44336)
-                {%- elif peak > 3 -%}
-                  var(--warning-color, #ff9800)
-                {%- else -%}
-                  var(--success-color, #4caf50)
-                {%- endif %};
-            }
+  # Peak Demand -- single card, amber left accent border, value folded
+  # into the primary line.
+  - type: custom:mushroom-template-card
+    entity: sensor.tariff_ausnet_nasn12_month_peak_demand
+    layout: horizontal
+    fill_container: true
+    icon: mdi:chart-line-variant
+    icon_color: amber
+    primary: >-
+      {% set peak = states('sensor.tariff_ausnet_nasn12_month_peak_demand') %}
+      Peak Demand · {{ '--' if peak in ['unknown', 'unavailable'] else peak ~ ' kW' }}
+    secondary: >-
+      {% set peak = states('sensor.tariff_ausnet_nasn12_month_peak_demand') %}
+      {% set ts = state_attr('sensor.tariff_ausnet_nasn12_month_peak_demand', 'demand_recorded_at') %}
+      {%- if peak in ['unknown', 'unavailable'] -%}
+        No data yet
+      {%- elif ts -%}
+        {% set dt = ts | as_datetime | as_local %}Recorded {{ dt.strftime('%A %-d %b at %-I:%M') }} {{ dt.strftime('%p') | lower }}
+      {%- else -%}
+        No peak recorded this month
+      {%- endif %}
+    tap_action:
+      action: more-info
+    card_mod:
+      style: |
+        ha-card {
+          border-left: 4px solid var(--warning-color, #ff9800) !important;
+          --card-primary-color: var(--warning-color, #ff9800) !important;
+        }
 
-  # Monthly Demand Charge -- same two-card layout, color-coded dollar value.
-  - type: custom:vertical-stack-in-card
-    horizontal: true
-    cards:
-      - type: custom:mushroom-template-card
-        entity: sensor.tariff_ausnet_nasn12_monthly_demand_charge
-        layout: horizontal
-        fill_container: true
-        icon: mdi:currency-usd
-        icon_color: orange
-        grid_options:
-          columns: 4
-        primary: Monthly Demand Charge
-        secondary: >-
-          {% set charge = states('sensor.tariff_ausnet_nasn12_monthly_demand_charge') %}
-          {% set ts = state_attr('sensor.tariff_ausnet_nasn12_monthly_demand_charge', 'demand_recorded_at') %}
-          {%- if charge in ['unknown', 'unavailable'] -%}
-            No data yet
-          {%- elif ts -%}
-            {% set dt = ts | as_datetime | as_local %}As of {{ dt.strftime('%A %-d %b at %-I:%M') }} {{ dt.strftime('%p') | lower }}
-          {%- else -%}
-            No charge recorded this month
-          {%- endif %}
-        tap_action:
-          action: more-info
-      - type: custom:mushroom-template-card
-        grid_options:
-          columns: 1
-        primary: >-
-          {% set charge = states('sensor.tariff_ausnet_nasn12_monthly_demand_charge') %}
-          {%- if charge in ['unknown', 'unavailable'] -%}
-            --
-          {%- else -%}
-            ${{ charge }}
-          {%- endif %}
-        tap_action:
-          action: more-info
-          target:
-            entity_id: sensor.tariff_ausnet_nasn12_monthly_demand_charge
-        card_mod:
-          style: |
-            ha-card {
-              --card-primary-font-size: 20px;
-              --card-primary-color: {% set charge = states('sensor.tariff_ausnet_nasn12_monthly_demand_charge') | float(0) -%}
-                {%- if charge > 50 -%}
-                  var(--error-color, #f44336)
-                {%- elif charge > 20 -%}
-                  var(--warning-color, #ff9800)
-                {%- else -%}
-                  var(--success-color, #4caf50)
-                {%- endif %};
-            }
+  # Monthly Demand Charge -- same single-card layout, amber accent.
+  - type: custom:mushroom-template-card
+    entity: sensor.tariff_ausnet_nasn12_monthly_demand_charge
+    layout: horizontal
+    fill_container: true
+    icon: mdi:currency-usd
+    icon_color: amber
+    primary: >-
+      {% set charge = states('sensor.tariff_ausnet_nasn12_monthly_demand_charge') %}
+      Monthly Demand Charge · {{ '--' if charge in ['unknown', 'unavailable'] else '$' ~ charge }}
+    secondary: >-
+      {% set charge = states('sensor.tariff_ausnet_nasn12_monthly_demand_charge') %}
+      {% set ts = state_attr('sensor.tariff_ausnet_nasn12_monthly_demand_charge', 'demand_recorded_at') %}
+      {%- if charge in ['unknown', 'unavailable'] -%}
+        No data yet
+      {%- elif ts -%}
+        {% set dt = ts | as_datetime | as_local %}As of {{ dt.strftime('%A %-d %b at %-I:%M') }} {{ dt.strftime('%p') | lower }}
+      {%- else -%}
+        No charge recorded this month
+      {%- endif %}
+    tap_action:
+      action: more-info
+    card_mod:
+      style: |
+        ha-card {
+          border-left: 4px solid var(--warning-color, #ff9800) !important;
+          --card-primary-color: var(--warning-color, #ff9800) !important;
+        }

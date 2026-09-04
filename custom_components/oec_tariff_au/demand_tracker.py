@@ -3,7 +3,8 @@
 import logging
 from datetime import datetime, time, timedelta
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_point_in_time, async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
@@ -173,8 +174,9 @@ class DemandTracker:
         # For rolling_12month_max: (peak_kw, recorded_at) per rolled-over month
         self.monthly_peaks_12: list[tuple[float, datetime | None]] = []
 
-        # Listener handle
+        # Listener handles
         self._unsub_timer = None
+        self._unsub_hass_stop = None
 
     @staticmethod
     def _parse_time(time_str: str) -> time:
@@ -314,10 +316,41 @@ class DemandTracker:
         """Return when the chargeable peak was recorded."""
         return self._chargeable_peak()[1]
 
+    def _flush_pending_block(self) -> None:
+        """Process and clear any in-progress block, same as the window-exit
+        flush in _async_sample -- so a block interrupted mid-way is treated
+        as complete instead of silently discarded."""
+        self._process_block()
+        self.current_block_samples = []
+        self.current_block_start = None
+
+    @callback
+    def _async_handle_hass_stop(self, event: Event) -> None:
+        """Flush the in-progress block before Home Assistant's own
+        RestoreEntity snapshot is taken on shutdown/restart.
+
+        A plain HA restart never calls async_unload_entry/stop() below --
+        homeassistant.core.HomeAssistant.async_stop() only fires
+        EVENT_HOMEASSISTANT_STOP, which is what RestoreEntity's own
+        dump-at-stop listener (an async coroutine, so merely *scheduled*
+        here, not run inline) uses to snapshot extra_restore_state_data.
+        This handler is registered as a plain @callback, which HA's event
+        bus runs synchronously inline while dispatching the event -- so it
+        is guaranteed to complete before that scheduled coroutine's body
+        actually executes, regardless of listener registration order.
+        Confirmed by reading homeassistant.core's async_stop()/
+        async_fire_internal() and helpers.restore_state.async_setup_dump()
+        directly (2026-09-04) -- see ha-tariff-au#8 investigation.
+        """
+        self._flush_pending_block()
+
     def start(self) -> None:
         """Start sampling."""
         self._unsub_timer = async_track_time_interval(
             self.hass, self._async_sample, SAMPLE_INTERVAL
+        )
+        self._unsub_hass_stop = self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, self._async_handle_hass_stop
         )
         _LOGGER.info(
             "Demand tracker started: entity=%s method=%s window=%s-%s days=%s",
@@ -329,10 +362,19 @@ class DemandTracker:
         )
 
     def stop(self) -> None:
-        """Stop sampling."""
+        """Stop sampling (explicit config-entry unload/reload path).
+
+        Flushes any in-progress block first -- see _flush_pending_block --
+        since neither current_block_samples nor current_block_start are
+        part of save_state()'s persisted blob.
+        """
+        self._flush_pending_block()
         if self._unsub_timer:
             self._unsub_timer()
             self._unsub_timer = None
+        if self._unsub_hass_stop:
+            self._unsub_hass_stop()
+            self._unsub_hass_stop = None
 
     def restore_state(self, data: dict) -> None:
         """Restore state from HA storage."""

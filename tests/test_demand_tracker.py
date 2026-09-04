@@ -103,9 +103,28 @@ class _FakeStates:
         return self._state
 
 
+class _FakeBus:
+    def __init__(self):
+        self.listeners = {}
+
+    def async_listen_once(self, event_type, callback_fn):
+        self.listeners[event_type] = callback_fn
+
+        def _remove():
+            self.listeners.pop(event_type, None)
+
+        return _remove
+
+    def fire(self, event_type):
+        listener = self.listeners.get(event_type)
+        if listener:
+            listener(None)
+
+
 class _FakeHass:
     def __init__(self, value, unit="kW"):
         self.states = _FakeStates(value, unit)
+        self.bus = _FakeBus()
 
 
 def test_async_sample_uses_local_time_not_utc(monkeypatch):
@@ -243,6 +262,89 @@ def test_async_sample_processes_previous_block_on_boundary_crossing():
     # New block started -> previous block's average (5.0) is flushed.
     assert tracker.month_peak_kw == 5.0
     assert tracker.current_block_samples == [1.0]
+
+
+def test_stop_flushes_in_progress_block_before_restart():
+    """Regression for the ha-tariff-au#8 restart data-loss bug: a genuine
+    high reading sitting in current_block_samples at the moment of an HA
+    restart must not be silently discarded -- stop() (called from
+    async_will_remove_from_hass on shutdown) has to flush it into
+    month_peak_kw first, since neither current_block_samples nor
+    current_block_start survive into save_state()'s persisted blob."""
+    hass = _FakeHass("25.0")
+    tracker = make_tracker(hass, measurement_method="30min_avg")
+    tracker._async_sample(dt(2026, 7, 22, 17, 5))
+    assert tracker.current_block_samples == [25.0]
+    assert tracker.month_peak_kw == 0.0  # not flushed yet -- still mid-block
+
+    tracker.stop()
+
+    assert tracker.month_peak_kw == 25.0
+    assert tracker.current_block_samples == []
+    assert tracker.current_block_start is None
+
+    # Simulate the restart: save/restore round trip must now carry the
+    # flushed peak forward instead of losing it.
+    saved = tracker.save_state()
+    restored = make_tracker(_FakeHass("0"), measurement_method="30min_avg")
+    restored.restore_state(saved)
+    assert restored.month_peak_kw == 25.0
+
+
+@pytest.fixture(autouse=True)
+def _stub_time_interval_tracking(monkeypatch):
+    """start() below also arms a real 30s sampling timer via
+    async_track_time_interval, which needs a genuine hass event loop we
+    don't have in these pure-logic tests -- stub it out so start()/stop()
+    tests only exercise the EVENT_HOMEASSISTANT_STOP registration."""
+    monkeypatch.setattr(demand_tracker_module, "async_track_time_interval", lambda *a, **k: (lambda: None))
+
+
+def test_hass_stop_event_flushes_in_progress_block():
+    """Regression for the real ha-tariff-au#8 root cause: a plain HA
+    restart never calls async_unload_entry/stop() at all -- core's
+    async_stop() only fires EVENT_HOMEASSISTANT_STOP, which is what
+    RestoreEntity's own dump-at-stop listener uses to snapshot
+    save_state(). start() must register its own listener for that same
+    event to flush the in-progress block before that snapshot is taken."""
+    hass = _FakeHass("25.0")
+    tracker = make_tracker(hass, measurement_method="30min_avg")
+    tracker.start()
+    tracker._async_sample(dt(2026, 7, 22, 17, 5))
+    assert tracker.current_block_samples == [25.0]
+    assert tracker.month_peak_kw == 0.0
+
+    hass.bus.fire("homeassistant_stop")
+
+    assert tracker.month_peak_kw == 25.0
+    assert tracker.current_block_samples == []
+
+
+def test_start_registers_hass_stop_listener():
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    hass = _FakeHass("1.0")
+    tracker = make_tracker(hass, measurement_method="30min_avg")
+    tracker.start()
+    assert EVENT_HOMEASSISTANT_STOP in hass.bus.listeners
+
+
+def test_stop_removes_hass_stop_listener():
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    hass = _FakeHass("1.0")
+    tracker = make_tracker(hass, measurement_method="30min_avg")
+    tracker.start()
+    tracker.stop()
+    assert EVENT_HOMEASSISTANT_STOP not in hass.bus.listeners
+
+
+def test_stop_is_a_noop_when_no_block_in_progress():
+    hass = _FakeHass("5.0")
+    tracker = make_tracker(hass, measurement_method="30min_max")
+    tracker.stop()
+    assert tracker.month_peak_kw == 0.0
+    assert tracker.current_block_samples == []
 
 
 def test_async_sample_leaving_window_flushes_in_progress_block():

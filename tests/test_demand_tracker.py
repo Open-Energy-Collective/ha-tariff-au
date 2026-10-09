@@ -103,9 +103,28 @@ class _FakeStates:
         return self._state
 
 
+class _FakeBus:
+    def __init__(self):
+        self.listeners = {}
+
+    def async_listen_once(self, event_type, callback_fn):
+        self.listeners[event_type] = callback_fn
+
+        def _remove():
+            self.listeners.pop(event_type, None)
+
+        return _remove
+
+    def fire(self, event_type):
+        listener = self.listeners.get(event_type)
+        if listener:
+            listener(None)
+
+
 class _FakeHass:
     def __init__(self, value, unit="kW"):
         self.states = _FakeStates(value, unit)
+        self.bus = _FakeBus()
 
 
 def test_async_sample_uses_local_time_not_utc(monkeypatch):
@@ -245,6 +264,89 @@ def test_async_sample_processes_previous_block_on_boundary_crossing():
     assert tracker.current_block_samples == [1.0]
 
 
+def test_stop_flushes_in_progress_block_before_restart():
+    """Regression for the ha-tariff-au#8 restart data-loss bug: a genuine
+    high reading sitting in current_block_samples at the moment of an HA
+    restart must not be silently discarded -- stop() (called from
+    async_will_remove_from_hass on shutdown) has to flush it into
+    month_peak_kw first, since neither current_block_samples nor
+    current_block_start survive into save_state()'s persisted blob."""
+    hass = _FakeHass("25.0")
+    tracker = make_tracker(hass, measurement_method="30min_avg")
+    tracker._async_sample(dt(2026, 7, 22, 17, 5))
+    assert tracker.current_block_samples == [25.0]
+    assert tracker.month_peak_kw == 0.0  # not flushed yet -- still mid-block
+
+    tracker.stop()
+
+    assert tracker.month_peak_kw == 25.0
+    assert tracker.current_block_samples == []
+    assert tracker.current_block_start is None
+
+    # Simulate the restart: save/restore round trip must now carry the
+    # flushed peak forward instead of losing it.
+    saved = tracker.save_state()
+    restored = make_tracker(_FakeHass("0"), measurement_method="30min_avg")
+    restored.restore_state(saved)
+    assert restored.month_peak_kw == 25.0
+
+
+@pytest.fixture(autouse=True)
+def _stub_time_interval_tracking(monkeypatch):
+    """start() below also arms a real 30s sampling timer via
+    async_track_time_interval, which needs a genuine hass event loop we
+    don't have in these pure-logic tests -- stub it out so start()/stop()
+    tests only exercise the EVENT_HOMEASSISTANT_STOP registration."""
+    monkeypatch.setattr(demand_tracker_module, "async_track_time_interval", lambda *a, **k: (lambda: None))
+
+
+def test_hass_stop_event_flushes_in_progress_block():
+    """Regression for the real ha-tariff-au#8 root cause: a plain HA
+    restart never calls async_unload_entry/stop() at all -- core's
+    async_stop() only fires EVENT_HOMEASSISTANT_STOP, which is what
+    RestoreEntity's own dump-at-stop listener uses to snapshot
+    save_state(). start() must register its own listener for that same
+    event to flush the in-progress block before that snapshot is taken."""
+    hass = _FakeHass("25.0")
+    tracker = make_tracker(hass, measurement_method="30min_avg")
+    tracker.start()
+    tracker._async_sample(dt(2026, 7, 22, 17, 5))
+    assert tracker.current_block_samples == [25.0]
+    assert tracker.month_peak_kw == 0.0
+
+    hass.bus.fire("homeassistant_stop")
+
+    assert tracker.month_peak_kw == 25.0
+    assert tracker.current_block_samples == []
+
+
+def test_start_registers_hass_stop_listener():
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    hass = _FakeHass("1.0")
+    tracker = make_tracker(hass, measurement_method="30min_avg")
+    tracker.start()
+    assert EVENT_HOMEASSISTANT_STOP in hass.bus.listeners
+
+
+def test_stop_removes_hass_stop_listener():
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    hass = _FakeHass("1.0")
+    tracker = make_tracker(hass, measurement_method="30min_avg")
+    tracker.start()
+    tracker.stop()
+    assert EVENT_HOMEASSISTANT_STOP not in hass.bus.listeners
+
+
+def test_stop_is_a_noop_when_no_block_in_progress():
+    hass = _FakeHass("5.0")
+    tracker = make_tracker(hass, measurement_method="30min_max")
+    tracker.stop()
+    assert tracker.month_peak_kw == 0.0
+    assert tracker.current_block_samples == []
+
+
 def test_async_sample_leaving_window_flushes_in_progress_block():
     hass = _FakeHass("8.0")
     tracker = make_tracker(hass, measurement_method="30min_max")
@@ -291,7 +393,7 @@ def test_crossing_billing_day_resets_month_peak_and_records_previous():
     tracker._async_sample(dt(2026, 8, 1, 17, 0))
 
     assert tracker.previous_month_peak_kw == 12.0
-    assert tracker.monthly_peaks_12 == [12.0]
+    assert tracker.monthly_peaks_12 == [(12.0, None)]
     assert tracker.month_peak_kw == 9.0  # this sample's value, post-reset
 
 
@@ -310,13 +412,13 @@ def test_same_billing_cycle_does_not_reset():
 def test_monthly_peaks_12_caps_at_twelve_entries():
     hass = _FakeHass("1.0")
     tracker = make_tracker(hass, measurement_method="monthly_peak")
-    tracker.monthly_peaks_12 = list(range(12))
+    tracker.monthly_peaks_12 = [(v, None) for v in range(12)]
     tracker.last_reset = dt(2026, 7, 1, 0, 0)
 
     tracker._async_sample(dt(2026, 8, 1, 17, 0))
 
     assert len(tracker.monthly_peaks_12) == 12
-    assert tracker.monthly_peaks_12 == list(range(1, 12)) + [0.0]
+    assert tracker.monthly_peaks_12 == [(v, None) for v in range(1, 12)] + [(0.0, None)]
 
 
 # --- chargeable_demand / restore-save round trip -----------------------
@@ -324,30 +426,98 @@ def test_monthly_peaks_12_caps_at_twelve_entries():
 
 def test_chargeable_demand_rolling_12month_max_includes_current_month():
     tracker = make_tracker(_FakeHass("0"), measurement_method="rolling_12month_max")
-    tracker.monthly_peaks_12 = [3.0, 7.0, 2.0]
+    tracker.monthly_peaks_12 = [(3.0, None), (7.0, None), (2.0, None)]
     tracker.month_peak_kw = 5.0
     assert tracker.chargeable_demand == 7.0
 
 
 def test_chargeable_demand_rolling_12month_max_current_month_is_new_high():
     tracker = make_tracker(_FakeHass("0"), measurement_method="rolling_12month_max")
-    tracker.monthly_peaks_12 = [3.0, 7.0, 2.0]
+    tracker.monthly_peaks_12 = [(3.0, None), (7.0, None), (2.0, None)]
     tracker.month_peak_kw = 9.0
     assert tracker.chargeable_demand == 9.0
 
 
 def test_chargeable_demand_non_rolling_method_ignores_history():
     tracker = make_tracker(_FakeHass("0"), measurement_method="30min_max")
-    tracker.monthly_peaks_12 = [99.0]
+    tracker.monthly_peaks_12 = [(99.0, None)]
     tracker.month_peak_kw = 4.0
     assert tracker.chargeable_demand == 4.0
+
+
+# --- demand_recorded_at ------------------------------------------------
+
+
+def test_block_methods_record_timestamp_at_block_start():
+    """30min_max/30min_avg/rolling_12month_max: demand_recorded_at should be
+    the start of the 30-min block the peak was observed in, not the exact
+    sample instant."""
+    hass = _FakeHass("8.0")
+    tracker = make_tracker(hass, measurement_method="30min_max")
+    tracker._async_sample(dt(2026, 7, 22, 17, 12))  # sample mid-block
+    # Not flushed yet -- still buffered in the current block.
+    assert tracker.month_peak_recorded_at is None
+
+    tracker._async_sample(dt(2026, 7, 22, 17, 31))  # crosses into next block
+    assert tracker.month_peak_kw == 8.0
+    assert tracker.month_peak_recorded_at == dt(2026, 7, 22, 17, 0)
+
+
+def test_monthly_peak_method_records_exact_sample_timestamp():
+    hass = _FakeHass("3.0")
+    tracker = make_tracker(hass, measurement_method="monthly_peak")
+    sample_time = dt(2026, 7, 22, 17, 6)
+    tracker._async_sample(sample_time)
+    assert tracker.month_peak_recorded_at == sample_time
+
+
+def test_lower_reading_does_not_update_recorded_at():
+    hass = _FakeHass("3.0")
+    tracker = make_tracker(hass, measurement_method="monthly_peak")
+    tracker._async_sample(dt(2026, 7, 22, 17, 0))
+    hass.states._state.state = "1.0"
+    tracker._async_sample(dt(2026, 7, 22, 18, 0))
+    assert tracker.month_peak_recorded_at == dt(2026, 7, 22, 17, 0)
+
+
+def test_billing_reset_carries_recorded_at_into_history_and_clears_current():
+    hass = _FakeHass("9.0")
+    tracker = make_tracker(hass, measurement_method="monthly_peak")
+    tracker.last_reset = dt(2026, 7, 1, 0, 0)
+    peak_time = dt(2026, 7, 15, 18, 0)
+    tracker.month_peak_kw = 12.0
+    tracker.month_peak_recorded_at = peak_time
+
+    tracker._async_sample(dt(2026, 8, 1, 17, 0))
+
+    assert tracker.monthly_peaks_12 == [(12.0, peak_time)]
+    assert tracker.month_peak_recorded_at == dt(2026, 8, 1, 17, 0)
+
+
+def test_chargeable_demand_recorded_at_rolling_picks_matching_month():
+    tracker = make_tracker(_FakeHass("0"), measurement_method="rolling_12month_max")
+    historic_time = dt(2026, 3, 15, 18, 0)
+    tracker.monthly_peaks_12 = [(3.0, dt(2026, 2, 1, 0, 0)), (7.0, historic_time), (2.0, None)]
+    tracker.month_peak_kw = 5.0
+    tracker.month_peak_recorded_at = dt(2026, 7, 20, 18, 0)
+
+    assert tracker.chargeable_demand == 7.0
+    assert tracker.chargeable_demand_recorded_at == historic_time
+
+
+def test_chargeable_demand_recorded_at_non_rolling_uses_current_month():
+    tracker = make_tracker(_FakeHass("0"), measurement_method="30min_max")
+    tracker.month_peak_kw = 4.0
+    tracker.month_peak_recorded_at = dt(2026, 7, 22, 17, 0)
+    assert tracker.chargeable_demand_recorded_at == dt(2026, 7, 22, 17, 0)
 
 
 def test_restore_state_and_save_state_round_trip():
     tracker = make_tracker(_FakeHass("0"))
     tracker.month_peak_kw = 6.75
+    tracker.month_peak_recorded_at = dt(2026, 7, 20, 18, 0)
     tracker.previous_month_peak_kw = 5.5
-    tracker.monthly_peaks_12 = [5.5, 6.0]
+    tracker.monthly_peaks_12 = [(5.5, dt(2026, 5, 1, 0, 0)), (6.0, None)]
     tracker.last_reset = dt(2026, 7, 1, 0, 0)
 
     saved = tracker.save_state()
@@ -356,9 +526,19 @@ def test_restore_state_and_save_state_round_trip():
     restored.restore_state(saved)
 
     assert restored.month_peak_kw == 6.75
+    assert restored.month_peak_recorded_at == dt(2026, 7, 20, 18, 0)
     assert restored.previous_month_peak_kw == 5.5
-    assert restored.monthly_peaks_12 == [5.5, 6.0]
+    assert restored.monthly_peaks_12 == [(5.5, dt(2026, 5, 1, 0, 0)), (6.0, None)]
     assert restored.last_reset == dt(2026, 7, 1, 0, 0)
+
+
+def test_restore_state_migrates_legacy_monthly_peaks_12_format():
+    """Saved blobs from before demand_recorded_at existed stored
+    monthly_peaks_12 as a plain list[float] -- restore_state must accept
+    that shape too, treating the missing timestamp as None."""
+    tracker = make_tracker(_FakeHass("0"))
+    tracker.restore_state({"monthly_peaks_12": [5.5, 6.0]})
+    assert tracker.monthly_peaks_12 == [(5.5, None), (6.0, None)]
 
 
 def test_restore_state_defaults_when_data_missing_keys():
@@ -377,6 +557,7 @@ def test_restore_state_defaults_when_data_missing_keys():
     )
     tracker.restore_state({})
     assert tracker.month_peak_kw == 0.0
+    assert tracker.month_peak_recorded_at is None
     assert tracker.previous_month_peak_kw == 0.0
     assert tracker.monthly_peaks_12 == []
     assert tracker.last_reset is None

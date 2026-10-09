@@ -3,7 +3,8 @@
 import logging
 from datetime import datetime, time, timedelta
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_point_in_time, async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
@@ -165,14 +166,17 @@ class DemandTracker:
 
         # State
         self.month_peak_kw: float = 0.0
+        self.month_peak_recorded_at: datetime | None = None
         self.previous_month_peak_kw: float = 0.0
         self.current_block_samples: list[float] = []
         self.current_block_start: datetime | None = None
         self.last_reset: datetime | None = None
-        self.monthly_peaks_12: list[float] = []  # For rolling_12month_max
+        # For rolling_12month_max: (peak_kw, recorded_at) per rolled-over month
+        self.monthly_peaks_12: list[tuple[float, datetime | None]] = []
 
-        # Listener handle
+        # Listener handles
         self._unsub_timer = None
+        self._unsub_hass_stop = None
 
     @staticmethod
     def _parse_time(time_str: str) -> time:
@@ -212,11 +216,12 @@ class DemandTracker:
         self.previous_month_peak_kw = self.month_peak_kw
 
         # Store for rolling 12-month (Jemena)
-        self.monthly_peaks_12.append(self.month_peak_kw)
+        self.monthly_peaks_12.append((self.month_peak_kw, self.month_peak_recorded_at))
         if len(self.monthly_peaks_12) > 12:
             self.monthly_peaks_12 = self.monthly_peaks_12[-12:]
 
         self.month_peak_kw = 0.0
+        self.month_peak_recorded_at = None
         self.last_reset = now
         _LOGGER.info(
             "Demand tracker billing reset. Previous peak: %.3f kW", self.previous_month_peak_kw
@@ -240,6 +245,7 @@ class DemandTracker:
 
         if block_value > self.month_peak_kw:
             self.month_peak_kw = round(block_value, 3)
+            self.month_peak_recorded_at = self.current_block_start
             _LOGGER.debug("New month peak demand: %.3f kW", self.month_peak_kw)
 
     @callback
@@ -289,21 +295,62 @@ class DemandTracker:
         if self.measurement_method == "monthly_peak":
             if power_kw > self.month_peak_kw:
                 self.month_peak_kw = round(power_kw, 3)
+                self.month_peak_recorded_at = now
         else:
             self.current_block_samples.append(power_kw)
+
+    def _chargeable_peak(self) -> tuple[float, datetime | None]:
+        """Return (value, recorded_at) for whichever peak is chargeable."""
+        if self.measurement_method == "rolling_12month_max":
+            candidates = [*self.monthly_peaks_12, (self.month_peak_kw, self.month_peak_recorded_at)]
+            return max(candidates, key=lambda peak: peak[0])
+        return self.month_peak_kw, self.month_peak_recorded_at
 
     @property
     def chargeable_demand(self) -> float:
         """Return the demand value used for charging."""
-        if self.measurement_method == "rolling_12month_max":
-            all_peaks = self.monthly_peaks_12 + [self.month_peak_kw]
-            return max(all_peaks) if all_peaks else 0.0
-        return self.month_peak_kw
+        return self._chargeable_peak()[0]
+
+    @property
+    def chargeable_demand_recorded_at(self) -> datetime | None:
+        """Return when the chargeable peak was recorded."""
+        return self._chargeable_peak()[1]
+
+    def _flush_pending_block(self) -> None:
+        """Process and clear any in-progress block, same as the window-exit
+        flush in _async_sample -- so a block interrupted mid-way is treated
+        as complete instead of silently discarded."""
+        self._process_block()
+        self.current_block_samples = []
+        self.current_block_start = None
+
+    @callback
+    def _async_handle_hass_stop(self, event: Event) -> None:
+        """Flush the in-progress block before Home Assistant's own
+        RestoreEntity snapshot is taken on shutdown/restart.
+
+        A plain HA restart never calls async_unload_entry/stop() below --
+        homeassistant.core.HomeAssistant.async_stop() only fires
+        EVENT_HOMEASSISTANT_STOP, which is what RestoreEntity's own
+        dump-at-stop listener (an async coroutine, so merely *scheduled*
+        here, not run inline) uses to snapshot extra_restore_state_data.
+        This handler is registered as a plain @callback, which HA's event
+        bus runs synchronously inline while dispatching the event -- so it
+        is guaranteed to complete before that scheduled coroutine's body
+        actually executes, regardless of listener registration order.
+        Confirmed by reading homeassistant.core's async_stop()/
+        async_fire_internal() and helpers.restore_state.async_setup_dump()
+        directly (2026-09-04) -- see ha-tariff-au#8 investigation.
+        """
+        self._flush_pending_block()
 
     def start(self) -> None:
         """Start sampling."""
         self._unsub_timer = async_track_time_interval(
             self.hass, self._async_sample, SAMPLE_INTERVAL
+        )
+        self._unsub_hass_stop = self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, self._async_handle_hass_stop
         )
         _LOGGER.info(
             "Demand tracker started: entity=%s method=%s window=%s-%s days=%s",
@@ -315,16 +362,39 @@ class DemandTracker:
         )
 
     def stop(self) -> None:
-        """Stop sampling."""
+        """Stop sampling (explicit config-entry unload/reload path).
+
+        Flushes any in-progress block first -- see _flush_pending_block --
+        since neither current_block_samples nor current_block_start are
+        part of save_state()'s persisted blob.
+        """
+        self._flush_pending_block()
         if self._unsub_timer:
             self._unsub_timer()
             self._unsub_timer = None
+        if self._unsub_hass_stop:
+            self._unsub_hass_stop()
+            self._unsub_hass_stop = None
 
     def restore_state(self, data: dict) -> None:
         """Restore state from HA storage."""
         self.month_peak_kw = data.get("month_peak_kw", 0.0)
         self.previous_month_peak_kw = data.get("previous_month_peak_kw", 0.0)
-        self.monthly_peaks_12 = data.get("monthly_peaks_12", [])
+
+        recorded_at = data.get("month_peak_recorded_at")
+        self.month_peak_recorded_at = datetime.fromisoformat(recorded_at) if recorded_at else None
+
+        # monthly_peaks_12 was a plain list[float] before demand_recorded_at
+        # was added -- accept either shape so old saved blobs still restore.
+        peaks = []
+        for entry in data.get("monthly_peaks_12", []):
+            if isinstance(entry, (list, tuple)):
+                value, ts = entry[0], entry[1] if len(entry) > 1 else None
+            else:
+                value, ts = entry, None
+            peaks.append((value, datetime.fromisoformat(ts) if ts else None))
+        self.monthly_peaks_12 = peaks
+
         last_reset = data.get("last_reset")
         if last_reset:
             self.last_reset = datetime.fromisoformat(last_reset)
@@ -333,7 +403,12 @@ class DemandTracker:
         """Return state for HA storage."""
         return {
             "month_peak_kw": self.month_peak_kw,
+            "month_peak_recorded_at": (
+                self.month_peak_recorded_at.isoformat() if self.month_peak_recorded_at else None
+            ),
             "previous_month_peak_kw": self.previous_month_peak_kw,
-            "monthly_peaks_12": self.monthly_peaks_12,
+            "monthly_peaks_12": [
+                [value, ts.isoformat() if ts else None] for value, ts in self.monthly_peaks_12
+            ],
             "last_reset": self.last_reset.isoformat() if self.last_reset else None,
         }

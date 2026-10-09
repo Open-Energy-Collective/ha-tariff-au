@@ -1,0 +1,144 @@
+# Demand-tracking status card for a single tariff instance.
+#
+# Requires two HACS custom cards (none bundled with this integration --
+# install both separately):
+#   - "Mushroom" by piitaya
+#   - "card-mod" (v4) -- CSS layout/coloring via templated `style:` blocks.
+#
+# `vertical-stack-in-card` is NO LONGER needed here (2026-08-30 restyle,
+# matching ha-fleet-connect's dispatch-plan-card.yaml) -- the old design
+# glued two Mushroom cards side by side per row (icon+text on the left,
+# a big color-coded value on the right) because Mushroom's own maintainer
+# has said template-card doesn't support right-aligned info by design
+# ("right places are for controls, not text" --
+# github.com/piitaya/lovelace-mushroom/discussions/793). The new style
+# folds the value into the primary text line instead ("Peak Demand ·
+# 6.5 kW") and uses a colored left accent border for the same at-a-glance
+# signal the right-aligned value used to give, so a single
+# mushroom-template-card per row is enough.
+#
+# Replace `sensor.tariff_ausnet_nasn12_*` below with your own tariff's
+# entity IDs (Settings -> Devices & services -> your tariff device -> the
+# entity list gives you the exact IDs). The title row doesn't need editing
+# -- it reads the device name straight from the registry.
+#
+# card_mod: ONLY the plain single-string `style: |` form (a real,
+# selector-wrapped `ha-card { ... }` ruleset -- the same pattern the
+# Demand Window tile below already used successfully) is confirmed
+# working on this install, via an isolated hardcoded test card checked
+# directly in-dashboard. A YAML-mapping `style:` (a `.` key for bare
+# declarations, or a `selector$:` key to pierce into a nested shadow
+# root for text-wrapping) was tried first and confirmed NOT to apply at
+# all here, despite matching card-mod's own documented behavior -- see
+# ha-fleet-connect's dispatch-plan-card.yaml for the full story. `!important`
+# is needed here because Mushroom sets some of these properties itself
+# with its own specificity.
+#
+# Consequence: there is no working text-wrap fix this way, so the
+# secondary line can still get ellipsis-truncated on a long sentence --
+# same known, deliberately deferred gap as the dispatch-plan card.
+#
+# Peak Demand and Monthly Demand Charge use a fixed amber accent rather
+# than threshold-based coloring (an earlier draft colored them red/amber/
+# green by value; simplified to a flat amber per feedback). Demand Window
+# keeps its state-based red (active) / green (inactive) coloring since
+# that's a status tile, not a value row.
+
+type: vertical-stack
+cards:
+  - type: custom:mushroom-title-card
+    title: >-
+      {{ device_attr(device_id('sensor.tariff_ausnet_nasn12_month_peak_demand'), 'name') }}
+
+  # Demand Window -- "DC Solar" tile style: whole-tile background tint
+  # reflecting state, icon + primary + secondary stacked normally.
+  # Unchanged by the 2026-08-30 restyle -- this one was never broken and
+  # is a different pattern (a status tile, not a value row).
+  - type: custom:mushroom-template-card
+    entity: sensor.tariff_ausnet_nasn12_demand_window
+    primary: Demand Window
+    secondary: >-
+      {% set window = states('sensor.tariff_ausnet_nasn12_demand_window') %}
+      {% if window == 'active' %}Active - counts toward peak demand{% elif window == 'inactive' %}Inactive{% else %}Unknown{% endif %}
+    icon: mdi:flash-alert
+    icon_color: >-
+      {% set window = states('sensor.tariff_ausnet_nasn12_demand_window') %}
+      {% if window == 'active' %}red{% elif window == 'inactive' %}green{% else %}disabled{% endif %}
+    tap_action:
+      action: more-info
+    card_mod:
+      style: |
+        ha-card {
+          {% set window = states('sensor.tariff_ausnet_nasn12_demand_window') -%}
+          background: {% if window == 'active' -%}
+              rgba(244, 67, 54, 0.15)
+            {%- elif window == 'inactive' -%}
+              rgba(76, 175, 80, 0.10)
+            {%- else -%}
+              transparent
+            {%- endif %};
+          {% if window == 'active' -%}
+          border-left: 4px solid var(--error-color, #f44336) !important;
+          {%- elif window == 'inactive' -%}
+          border-left: 4px solid var(--success-color, #4caf50) !important;
+          {%- endif %}
+        }
+
+  # Peak Demand -- single card, amber left accent border, value folded
+  # into the primary line.
+  - type: custom:mushroom-template-card
+    entity: sensor.tariff_ausnet_nasn12_month_peak_demand
+    layout: horizontal
+    fill_container: true
+    icon: mdi:chart-line-variant
+    icon_color: amber
+    primary: >-
+      {% set peak = states('sensor.tariff_ausnet_nasn12_month_peak_demand') %}
+      Peak Demand · {{ '--' if peak in ['unknown', 'unavailable'] else peak ~ ' kW' }}
+    secondary: >-
+      {% set peak = states('sensor.tariff_ausnet_nasn12_month_peak_demand') %}
+      {% set ts = state_attr('sensor.tariff_ausnet_nasn12_month_peak_demand', 'demand_recorded_at') %}
+      {%- if peak in ['unknown', 'unavailable'] -%}
+        No data yet
+      {%- elif ts -%}
+        {% set dt = ts | as_datetime | as_local %}Recorded {{ dt.strftime('%A %-d %b at %-I:%M') }} {{ dt.strftime('%p') | lower }}
+      {%- else -%}
+        No peak recorded this month
+      {%- endif %}
+    tap_action:
+      action: more-info
+    card_mod:
+      style: |
+        ha-card {
+          border-left: 4px solid var(--warning-color, #ff9800) !important;
+          --card-primary-color: var(--warning-color, #ff9800) !important;
+        }
+
+  # Monthly Demand Charge -- same single-card layout, amber accent.
+  - type: custom:mushroom-template-card
+    entity: sensor.tariff_ausnet_nasn12_monthly_demand_charge
+    layout: horizontal
+    fill_container: true
+    icon: mdi:currency-usd
+    icon_color: amber
+    primary: >-
+      {% set charge = states('sensor.tariff_ausnet_nasn12_monthly_demand_charge') %}
+      Monthly Demand Charge · {{ '--' if charge in ['unknown', 'unavailable'] else '$' ~ charge }}
+    secondary: >-
+      {% set charge = states('sensor.tariff_ausnet_nasn12_monthly_demand_charge') %}
+      {% set ts = state_attr('sensor.tariff_ausnet_nasn12_monthly_demand_charge', 'demand_recorded_at') %}
+      {%- if charge in ['unknown', 'unavailable'] -%}
+        No data yet
+      {%- elif ts -%}
+        {% set dt = ts | as_datetime | as_local %}As of {{ dt.strftime('%A %-d %b at %-I:%M') }} {{ dt.strftime('%p') | lower }}
+      {%- else -%}
+        No charge recorded this month
+      {%- endif %}
+    tap_action:
+      action: more-info
+    card_mod:
+      style: |
+        ha-card {
+          border-left: 4px solid var(--warning-color, #ff9800) !important;
+          --card-primary-color: var(--warning-color, #ff9800) !important;
+        }

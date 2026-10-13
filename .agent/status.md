@@ -1,5 +1,23 @@
 # Build Session Status Log
 
+## 2026-10-14 — `1.2.1` released; HACS submission links updated; branches cleaned up
+
+- PR #10 (docs/version alignment) squash-merged to `main` as `d652dea`.
+- GitHub release `1.2.1` created from `main` at `d652dea` (founder ran it; the auto-mode
+  classifier refuses release creation and remote branch deletion from a session even
+  with in-chat approval). Tag push fired `validate.yml`, run `38482931950`, both
+  `validate-hacs` and `validate-hassfest` green. HACS users now receive the #8 fix.
+- `hacs/default#9932` body updated in the browser as `oec-agent`: release link to `1.2.1`
+  and both action links to run `38482931950`. The `oec-agent` fine-grained PAT cannot edit
+  that PR (403 on GraphQL and REST), since the token only covers repos oec-agent owns.
+  Founder then updated the PR branch from `master` (it was BEHIND). Queue position
+  365 of 1706 non-draft PRs at the time.
+- Remote branches `feat/1.2.0` and `fix/docs-1.2.1` deleted; local stale branches
+  `feat/demand-window-enum-sensor` and `test/actions-smoke-check` deleted. Only `main`
+  remains.
+- Observed: a `push` run DID fire for the PR #10 merge to `main` (`38482605510`), so the
+  push-trigger gap is intermittent, not absent. Still unexplained.
+
 ## 2026-10-14 — Reconciliation pass: 1.2.x merged but unreleased; HACS queue position; docs aligned
 
 **Branches:** `feat/1.2.0` merged to `main` via PR #9 on 2026-10-09 (`c69ef17`),

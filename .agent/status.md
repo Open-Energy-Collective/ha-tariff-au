@@ -1,5 +1,38 @@
 # Build Session Status Log
 
+## 2026-10-14 — Reconciliation pass: 1.2.x merged but unreleased; HACS queue position; docs aligned
+
+**Branches:** `feat/1.2.0` merged to `main` via PR #9 on 2026-10-09 (`c69ef17`),
+carrying 1.2.0 (`demand_recorded_at` attribute, example dashboard card) and 1.2.1
+(demand-peak freeze across restarts, #8). `manifest.json` says `1.2.1`.
+
+**Finding, load-bearing: no `1.2.0` or `1.2.1` tag or GitHub release exists.** Latest
+release is still `1.1.1` (2026-08-28). HACS installs from the release zipball, so every
+HACS user is still on 1.1.1 without the #8 fix. The planning tracker's "Released 1.2.1
+(2026-09-05)" line records the commit, not a release. Release creation from `c69ef17`
+was attempted this session and is held for the founder (permission-gated), same for
+deleting the merged `feat/1.2.0` remote branch.
+
+**HACS `hacs/default#9932`:** still open, mergeable, labelled "New default repository",
+no bot rejection. Position 365 of 1706 non-draft open PRs in the queue. The
+2026-09-16/29 activity on it was the HACS side merging `master` in and fixing the
+entry's sort order, not a review.
+
+**CI:** the "push never triggers `validate.yml`" tracker item is wrong as stated. Push
+runs fired on `main` 2026-08-23 and 08-28 and on `feat/1.2.0` 09-24, but none fired for
+the 10-09 merge to `main`. Intermittent, not absent. Weekly scheduled runs on `main`
+pass, latest 2026-10-13.
+
+**Docs drift fixed on `fix/docs-1.2.1`:** README called the demand window a binary
+sensor (enum sensor since PR #4) and omitted `demand_recorded_at` and the dashboard
+card; `pyproject.toml` version was `0.1.0` against manifest `1.2.1`; `hacs.json` gains
+`country: ["AU"]`; `dashboards/demand-card.yaml` header comments restated in present
+tense (they carried change-lineage narrative). 79 tests pass.
+
+**For Planning:** mark the 1.2.1 line as merged-not-released until the release is cut;
+rewrite the push-trigger item as intermittent; close the `country` item once this
+branch merges.
+
 ## 2026-08-14 — `validate.yml` pinned + merged to `main`; HACS `hacs/default` submission opened
 
 Closes both items from the 2026-08-12 build HANDOFF in `TODO-ha-tariff-au.md`

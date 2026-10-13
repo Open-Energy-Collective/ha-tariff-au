@@ -1,6 +1,6 @@
 [project]
 name = "integration_hass_oec-tariff-au"
-version = "0.1.0"
+version = "1.2.1"
 description = "Home Assistant integration for OEC Tariff Data Service"
 readme = "README.md"
 license = {text = "MIT"}

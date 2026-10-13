@@ -5,44 +5,30 @@
 #   - "Mushroom" by piitaya
 #   - "card-mod" (v4) -- CSS layout/coloring via templated `style:` blocks.
 #
-# `vertical-stack-in-card` is NO LONGER needed here (2026-08-30 restyle,
-# matching ha-fleet-connect's dispatch-plan-card.yaml) -- the old design
-# glued two Mushroom cards side by side per row (icon+text on the left,
-# a big color-coded value on the right) because Mushroom's own maintainer
-# has said template-card doesn't support right-aligned info by design
-# ("right places are for controls, not text" --
-# github.com/piitaya/lovelace-mushroom/discussions/793). The new style
-# folds the value into the primary text line instead ("Peak Demand ·
-# 6.5 kW") and uses a colored left accent border for the same at-a-glance
-# signal the right-aligned value used to give, so a single
-# mushroom-template-card per row is enough.
+# One mushroom-template-card per row. The value is folded into the primary
+# text line ("Peak Demand · 6.5 kW") and a colored left accent border gives
+# the at-a-glance signal, because Mushroom's template-card does not support
+# right-aligned info by design ("right places are for controls, not text" --
+# github.com/piitaya/lovelace-mushroom/discussions/793).
 #
 # Replace `sensor.tariff_ausnet_nasn12_*` below with your own tariff's
 # entity IDs (Settings -> Devices & services -> your tariff device -> the
 # entity list gives you the exact IDs). The title row doesn't need editing
 # -- it reads the device name straight from the registry.
 #
-# card_mod: ONLY the plain single-string `style: |` form (a real,
-# selector-wrapped `ha-card { ... }` ruleset -- the same pattern the
-# Demand Window tile below already used successfully) is confirmed
-# working on this install, via an isolated hardcoded test card checked
-# directly in-dashboard. A YAML-mapping `style:` (a `.` key for bare
-# declarations, or a `selector$:` key to pierce into a nested shadow
-# root for text-wrapping) was tried first and confirmed NOT to apply at
-# all here, despite matching card-mod's own documented behavior -- see
-# ha-fleet-connect's dispatch-plan-card.yaml for the full story. `!important`
-# is needed here because Mushroom sets some of these properties itself
-# with its own specificity.
+# card_mod: use only the plain single-string `style: |` form with a
+# selector-wrapped `ha-card { ... }` ruleset. A YAML-mapping `style:` (a `.`
+# key for bare declarations, or a `selector$:` key to pierce a nested shadow
+# root) does not apply here despite card-mod's documentation. `!important`
+# is needed because Mushroom sets some of these properties itself with its
+# own specificity.
 #
 # Consequence: there is no working text-wrap fix this way, so the
-# secondary line can still get ellipsis-truncated on a long sentence --
-# same known, deliberately deferred gap as the dispatch-plan card.
+# secondary line can still get ellipsis-truncated on a long sentence.
 #
-# Peak Demand and Monthly Demand Charge use a fixed amber accent rather
-# than threshold-based coloring (an earlier draft colored them red/amber/
-# green by value; simplified to a flat amber per feedback). Demand Window
-# keeps its state-based red (active) / green (inactive) coloring since
-# that's a status tile, not a value row.
+# Peak Demand and Monthly Demand Charge use a fixed amber accent, not
+# threshold-based coloring. Demand Window keeps its state-based red (active)
+# / green (inactive) coloring since that's a status tile, not a value row.
 
 type: vertical-stack
 cards:
@@ -51,9 +37,8 @@ cards:
       {{ device_attr(device_id('sensor.tariff_ausnet_nasn12_month_peak_demand'), 'name') }}
 
   # Demand Window -- "DC Solar" tile style: whole-tile background tint
-  # reflecting state, icon + primary + secondary stacked normally.
-  # Unchanged by the 2026-08-30 restyle -- this one was never broken and
-  # is a different pattern (a status tile, not a value row).
+  # reflecting state, icon + primary + secondary stacked normally. A status
+  # tile, not a value row, so it follows a different pattern.
   - type: custom:mushroom-template-card
     entity: sensor.tariff_ausnet_nasn12_demand_window
     primary: Demand Window

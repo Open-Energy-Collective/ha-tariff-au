@@ -7,10 +7,11 @@ Real-time Australian network tariff data in Home Assistant, powered by the [Tari
 
 - **Current rate** sensor ($/kWh) — updates every 5 minutes
 - **Current period** sensor — peak, off_peak, shoulder, solar_soak
-- **Demand window** binary sensor — Active/Inactive for automation triggers
+- **Demand window** enum sensor — Active/Inactive, selectable as a dropdown in automation triggers
 - **Daily supply charge** sensor
 - **Demand rate** sensor with window/method attributes
-- **Demand charge tracker** — monitors your grid power and calculates peak demand charges
+- **Demand charge tracker** — monitors your grid power and calculates peak demand charges, with a `demand_recorded_at` attribute giving the time of the current chargeable peak
+- **Example dashboard card** — `dashboards/demand-card.yaml` shows demand-tracking status at a glance
 - **Config flow UI** — pick your DNSP, tariff, and optionally configure demand tracking
 
 ## Supported DNSPs
@@ -80,6 +81,12 @@ The tracker automatically uses the correct measurement methodology for your DNSP
 | `rolling_12month_max` | Jemena | Max of last 12 monthly peaks |
 
 Samples every 30 seconds. Only records during the demand window (time, days, and season as defined by your DNSP). Persists across restarts.
+
+Each demand tracking sensor carries a `demand_recorded_at` attribute: the ISO timestamp at which the current chargeable peak was recorded, or unset if nothing has been recorded this billing month.
+
+### Example Dashboard Card
+
+`dashboards/demand-card.yaml` is a ready-made Lovelace card showing the demand window, current peak and projected charge for one tariff. It needs the Mushroom and card-mod custom cards from HACS; the file header lists the entity IDs to substitute.
 
 ## Example Automations
 

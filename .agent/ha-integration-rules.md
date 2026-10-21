@@ -104,10 +104,11 @@ tests/
 Before adding any dependency: verify it declares an approved license (MIT, Apache-2.0,
 BSD-2/3-Clause, ISC, LGPL). Anything else, unclear, or missing — stop and ask.
 
-## Security / PII scan before any release or HACS submission
+## Security / PII review before a public push, release or HACS submission
 This repo is public (`github.com/Open-Energy-Collective/ha-tariff-au`). No
-security-scan script or checklist exists in the OEC layout. Until one is restored, a
-release or HACS submission needs a manual security and PII review against
-`governance/security-standards.md` and `governance/security-privacy-principles.md`, and
-the founder's go-ahead. Never write an exact leaked value or exact commit hash into this
-repo's status.md or commit messages, even when documenting a fix.
+security-scan script or checklist exists in the OEC layout. Until one is restored, a push
+to a public remote, a public release or a HACS submission needs a manual security and
+PII review against `governance/security-standards.md` and
+`governance/security-privacy-principles.md`, and the founder's go-ahead. Never write an
+exact leaked value or exact commit hash into this repo's status.md or commit messages,
+even when documenting a fix.

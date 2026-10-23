@@ -110,5 +110,4 @@ security-scan script or checklist exists in the OEC layout. Until one is restore
 to a public remote, a public release or a HACS submission needs a manual security and
 PII review against `governance/security-standards.md` and
 `governance/security-privacy-principles.md`, and the founder's go-ahead. Never write an
-exact leaked value or exact commit hash into this repo's status.md or commit messages,
-even when documenting a fix.
+exact leaked value or exact commit hash into a commit message, even when documenting a fix.

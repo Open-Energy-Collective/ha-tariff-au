@@ -109,5 +109,5 @@ This repo is public (`github.com/Open-Energy-Collective/ha-tariff-au`). No
 security-scan script or checklist exists in the OEC layout. Until one is restored, a push
 to a public remote, a public release or a HACS submission needs a manual security and
 PII review against `governance/security-standards.md` and
-`governance/security-privacy-principles.md`, and the founder's go-ahead. Never write an
+`governance/security-privacy-principles.md`, and the maintainer's go-ahead. Never write an
 exact leaked value or exact commit hash into a commit message, even when documenting a fix.

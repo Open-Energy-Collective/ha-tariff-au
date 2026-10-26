@@ -7,7 +7,7 @@ Real-time Australian network tariff data in Home Assistant, powered by the [Tari
 
 - **Current rate** sensor ($/kWh) — updates every 5 minutes
 - **Current period** sensor — peak, off_peak, shoulder, solar_soak
-- **Demand window** enum sensor — Active/Inactive, selectable as a dropdown in automation triggers
+- **Demand window** enum sensor — `active` or `inactive`, selectable as a dropdown in automation triggers
 - **Daily supply charge** sensor
 - **Demand rate** sensor with window/method attributes
 - **Demand charge tracker** — monitors your grid power and calculates peak demand charges, with a `demand_recorded_at` attribute giving the time of the current chargeable peak
@@ -22,12 +22,13 @@ All DNSPs served by the Tariff Data Service (currently 12 across NSW, VIC, QLD, 
 
 ### HACS (recommended)
 
-1. Add this repository as a custom repository in HACS
-2. Install "OEC Tariff (AU)"
-3. Restart Home Assistant
-4. Go to Settings → Integrations → Add Integration → "OEC Tariff (AU)"
-5. Select your DNSP and tariff code
-6. Optionally configure demand tracking (select power sensor + billing day)
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Open-Energy-Collective&repository=ha-tariff-au&category=integration)
+
+1. In HACS, search for "OEC Tariff (AU)" and select **Download**
+2. Restart Home Assistant
+3. Go to Settings → Integrations → Add Integration → "OEC Tariff (AU)"
+4. Select your DNSP and tariff code
+5. Optionally configure demand tracking (select power sensor + billing day)
 
 ### Manual
 
@@ -59,7 +60,7 @@ Entity IDs follow the pattern `sensor.tariff_{dnsp}_{tariff}_{name}`. For exampl
 | `sensor.tariff_energex_3900_daily_supply_charge` | $/day | Fixed daily network charge |
 | `sensor.tariff_energex_3900_demand_rate` | $/kW/month | Demand charge rate |
 | `sensor.tariff_energex_3900_tariff_name` | — | Human-readable tariff name |
-| `sensor.tariff_energex_3900_demand_window` | Active/Inactive | Whether demand is being measured |
+| `sensor.tariff_energex_3900_demand_window` | — | Whether demand is being measured: `active`, `inactive` |
 
 ### Demand Tracking Sensors (if power entity configured)
 
@@ -97,7 +98,7 @@ automation:
     trigger:
       - platform: state
         entity_id: sensor.tariff_energex_3900_demand_window
-        to: "Active"
+        to: "active"
     action:
       - service: switch.turn_off
         target:

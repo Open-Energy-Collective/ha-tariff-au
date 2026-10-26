@@ -28,4 +28,12 @@ def _warm_up_aiohttp_before_any_test():
         async with aiohttp.ClientSession():
             pass
 
-    asyncio.run(_warm())
+    # Its own loop, not asyncio.run(): that clears the current event loop on exit,
+    # and older plugin releases (0.13.317, HA 2026.3.1, the CI minimum) call
+    # asyncio.get_event_loop() in an autouse fixture, which raises on Python 3.14
+    # with no current loop.
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_warm())
+    finally:
+        loop.close()

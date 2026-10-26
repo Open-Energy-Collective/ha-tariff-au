@@ -2,9 +2,9 @@ name: Validate
 
 on:
   push:
+    branches: ["feat/**"]
   pull_request:
-  schedule:
-    - cron: "0 0 * * *"
+    branches: ["main"]
   workflow_dispatch:
 
 permissions: {}
@@ -21,5 +21,28 @@ jobs:
   validate-hassfest:
     runs-on: "ubuntu-latest"
     steps:
-      - uses: "actions/checkout@v4"
+      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
       - uses: "home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb" # master @ 2026-08-03, no tagged releases for this action
+
+  tests:
+    name: "tests (HA ${{ matrix.ha }})"
+    runs-on: "ubuntu-latest"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ha: "latest"
+            plugin: "pytest-homeassistant-custom-component"
+          # Minimum supported HA is hacs.json "homeassistant" (2026.3.0). No plugin
+          # release pins 2026.3.0; 0.13.317 is the first 2026.3 one (2026.3.1).
+          - ha: "2026.3.1"
+            plugin: "pytest-homeassistant-custom-component==0.13.317"
+    steps:
+      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+      - uses: "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0" # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Install test dependencies
+        run: pip install "${{ matrix.plugin }}"
+      - name: Run tests
+        run: python -m pytest tests/ -v

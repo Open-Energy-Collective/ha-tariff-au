@@ -1,8 +1,6 @@
 name: Validate
 
 on:
-  push:
-    branches: ["feat/**"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:

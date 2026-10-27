@@ -104,10 +104,10 @@ tests/
 Before adding any dependency: verify it declares an approved license (MIT, Apache-2.0,
 BSD-2/3-Clause, ISC, LGPL). Anything else, unclear, or missing — stop and ask.
 
-## Security / PII scan before any release or HACS submission
-This repo is real and public (`github.com/Open-Energy-Collective/ha-tariff-au`) — run
-`../.agent/scripts/security-scan.sh ha-tariff-au` before cutting a release or touching
-anything HACS-submission-related. Process/checklist: `repos/.agent/security-scan.md`,
-including its "Recording a finding without republishing it" section — never write an
-exact leaked value or exact commit hash into this repo's own status.md/commit
-messages, even when documenting a fix.
+## Security / PII review before a public push, release or HACS submission
+This repo is public (`github.com/Open-Energy-Collective/ha-tariff-au`). No
+security-scan script or checklist exists in the OEC layout. Until one is restored, a push
+to a public remote, a public release or a HACS submission needs a manual security and
+PII review against `governance/security-standards.md` and
+`governance/security-privacy-principles.md`, and the maintainer's go-ahead. Never write an
+exact leaked value or exact commit hash into a commit message, even when documenting a fix.

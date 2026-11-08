@@ -3,6 +3,7 @@ amortization formula.
 """
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from homeassistant.core import State
 from pytest_homeassistant_custom_component.common import mock_restore_cache_with_extra_data
@@ -24,6 +25,7 @@ class FakeCoordinator:
         self.tariff = "test_tariff"
         self.tariff_detail = {"demand": demand}
         self.data = {"detail": {"demand": demand}}
+        self.dnsp_time_zone = ZoneInfo("Australia/Melbourne")
 
     def async_add_listener(self, update_callback, context=None):
         """CoordinatorEntity.async_added_to_hass() needs this to register."""
@@ -37,14 +39,14 @@ class FakeEntry:
         self.data = data or {}
 
 
-def make_tracker(window_start, window_end, month_peak_kw, measurement_method="30min_max"):
+def make_tracker(window_start, window_end, month_peak_kw, measurement_method="30min_max", days="all"):
     tracker = DemandTracker(
         hass=None,
         power_entity_id="sensor.power",
         measurement_method=measurement_method,
         window_start=window_start,
         window_end=window_end,
-        days="all",
+        days=days,
         season_months=None,
         billing_day=1,
     )
@@ -53,27 +55,49 @@ def make_tracker(window_start, window_end, month_peak_kw, measurement_method="30
 
 
 def test_surcharge_per_kwh_matches_tariff_service_formula():
-    """4.5 kW peak demand at $7.434/kW over a 5-hour daily window should
-    amortize to 0.22302 $/kWh — same figures/expected value as
-    tariff-service's own test_demand_surcharge (dnsp=energex, tariff=T12A),
-    since both implement the same amortization formula independently."""
+    """$7.434/kW over a 5-hour daily window is 7.434 / 150 = 0.04956 $/kWh, the
+    value tariff-service's test_demand_surcharge pins (tariff-service#33)."""
     demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
     tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
     sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
 
-    assert abs(sensor.native_value - 0.22302) < 0.001
+    assert sensor.native_value == 0.04956
+
+
+def test_surcharge_per_kwh_does_not_scale_with_peak_demand():
+    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
+    tracker = make_tracker("16:00", "21:00", month_peak_kw=10.0)
+    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
+
+    assert sensor.native_value == 0.04956
+
+
+def test_surcharge_per_kwh_weekday_window_counts_weekdays_only():
+    """AusNet NASN12: 6 hours x 30 x 5/7 = 128.57 hours, as tariff-service returns."""
+    demand = {"rate": 11.473, "window_start": "15:00", "window_end": "21:00"}
+    tracker = make_tracker("15:00", "21:00", month_peak_kw=5.0, days="weekdays")
+    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
+
+    assert sensor.native_value == 0.08923
+
+
+def test_surcharge_per_kwh_weekend_window_counts_weekends_only():
+    demand = {"rate": 6.0, "window_start": "15:00", "window_end": "21:00"}
+    tracker = make_tracker("15:00", "21:00", month_peak_kw=5.0, days="weekends")
+    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
+
+    # 6.0 / (6 * 30 * 2 / 7) = 0.11667
+    assert sensor.native_value == 0.11667
 
 
 def test_surcharge_per_kwh_all_day_window_no_division_by_zero():
-    """An all-day (00:00-00:00) demand window — the real Jemena A230 /
-    AusNet NASN12 convention — must not divide by zero and must treat the
-    window as the full 24 hours."""
+    """An all-day (00:00-00:00) demand window must treat the window as 24 hours."""
     demand = {"rate": 11.473, "window_start": "00:00", "window_end": "00:00"}
     tracker = make_tracker("00:00", "00:00", month_peak_kw=5.0, measurement_method="monthly_peak")
     sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
 
-    # 5.0 * 11.473 / (24 * 30) = 0.07967
-    assert abs(sensor.native_value - 0.07967) < 0.001
+    # 11.473 / (24 * 30) = 0.01593
+    assert sensor.native_value == 0.01593
 
 
 def test_surcharge_per_kwh_zero_peak_demand_returns_zero():
@@ -312,3 +336,20 @@ def test_demand_surcharge_per_kwh_sensor_exposes_demand_recorded_at():
     sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
 
     assert sensor.extra_state_attributes == {"demand_recorded_at": "2026-07-22T17:00:00"}
+
+
+async def test_async_setup_demand_sensors_passes_the_dnsp_time_zone_to_the_tracker(hass):
+    demand = {
+        "rate": 11.473,
+        "window_start": "15:00",
+        "window_end": "21:00",
+        "days": "weekdays",
+        "season_months": None,
+        "measurement_method": "monthly_peak",
+    }
+    coordinator = FakeCoordinator(demand)
+    entry = FakeEntry({"power_entity": "sensor.power"})
+
+    tracker = await async_setup_demand_sensors(hass, entry, coordinator, lambda entities: None)
+
+    assert tracker.time_zone == ZoneInfo("Australia/Melbourne")

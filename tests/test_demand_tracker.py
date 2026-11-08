@@ -1,6 +1,7 @@
 """Tests for the demand window pure-logic helper in demand_tracker.py."""
 
 from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -561,3 +562,49 @@ def test_restore_state_defaults_when_data_missing_keys():
     assert tracker.previous_month_peak_kw == 0.0
     assert tracker.monthly_peaks_12 == []
     assert tracker.last_reset is None
+
+
+# --- Windows resolve in the DNSP's time zone (ha-tariff-au#13) ---------------
+
+
+def _melbourne_tracker():
+    return DemandTracker(
+        hass=None,
+        power_entity_id="sensor.power",
+        measurement_method="monthly_peak",
+        window_start="15:00",
+        window_end="21:00",
+        days="weekdays",
+        season_months=[12],
+        billing_day=1,
+        time_zone=ZoneInfo("Australia/Melbourne"),
+    )
+
+
+def test_tracker_window_opens_on_the_dnsp_clock():
+    # 14:30 Brisbane in December is 15:30 Melbourne.
+    now = datetime(2026, 12, 9, 14, 30, tzinfo=ZoneInfo("Australia/Brisbane"))
+    assert _melbourne_tracker()._is_in_demand_window(now) is True
+
+
+def test_tracker_window_closes_on_the_dnsp_clock():
+    # 20:30 Brisbane in December is 21:30 Melbourne.
+    now = datetime(2026, 12, 9, 20, 30, tzinfo=ZoneInfo("Australia/Brisbane"))
+    assert _melbourne_tracker()._is_in_demand_window(now) is False
+
+
+def test_tracker_day_and_season_follow_the_dnsp_clock():
+    # 23:30 Brisbane on Sunday 31 Jan is 00:30 Melbourne on Monday 1 Feb.
+    tracker = DemandTracker(
+        hass=None,
+        power_entity_id="sensor.power",
+        measurement_method="monthly_peak",
+        window_start="00:00",
+        window_end="06:00",
+        days="weekdays",
+        season_months=[2],
+        billing_day=1,
+        time_zone=ZoneInfo("Australia/Melbourne"),
+    )
+    now = datetime(2027, 1, 31, 23, 30, tzinfo=ZoneInfo("Australia/Brisbane"))
+    assert tracker._is_in_demand_window(now) is True

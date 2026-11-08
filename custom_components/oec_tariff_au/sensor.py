@@ -194,7 +194,9 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
     async def async_added_to_hass(self) -> None:
         """Start tracking the window boundary once added."""
         await super().async_added_to_hass()
-        self._scheduler = DemandWindowScheduler(self.hass, self._handle_transition)
+        self._scheduler = DemandWindowScheduler(
+            self.hass, self._handle_transition, self.coordinator.dnsp_time_zone
+        )
         detail = self.coordinator.tariff_detail
         demand = detail.get("demand") if detail else None
         if demand:

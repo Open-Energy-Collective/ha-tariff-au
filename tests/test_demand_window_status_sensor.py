@@ -1,6 +1,7 @@
 """Tests for the Demand Window Status enum sensor and its shared DemandWindowScheduler."""
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from custom_components.oec_tariff_au.demand_tracker import DemandWindowScheduler
 from custom_components.oec_tariff_au.sensor import OecDemandWindowStatusSensor
@@ -62,6 +63,11 @@ class FakeCoordinator:
         self.tariff = "test_tariff"
         self.tariff_detail = tariff_detail
         self.data = None
+        self.dnsp_time_zone = ZoneInfo("Australia/Melbourne")
+
+    def async_add_listener(self, update_callback, context=None):
+        """CoordinatorEntity.async_added_to_hass() needs this to register."""
+        return lambda: None
 
 
 class FakeEntry:
@@ -87,3 +93,43 @@ def test_native_value_reflects_scheduler_status():
 
     sensor._scheduler.is_active = False
     assert sensor.native_value == "inactive"
+
+
+# --- Windows resolve in the DNSP's time zone (ha-tariff-au#13) ---------------
+
+MELBOURNE = ZoneInfo("Australia/Melbourne")
+BRISBANE = ZoneInfo("Australia/Brisbane")
+
+
+def make_melbourne_scheduler():
+    scheduler = DemandWindowScheduler(
+        hass=None, on_transition=lambda is_active: None, time_zone=MELBOURNE
+    )
+    scheduler._load_window_config(
+        {"window_start": "15:00", "window_end": "21:00", "days": "weekdays", "season_months": [12]}
+    )
+    return scheduler
+
+
+def test_status_follows_the_dnsp_clock():
+    scheduler = make_melbourne_scheduler()
+    assert scheduler.status_at(datetime(2026, 12, 9, 14, 30, tzinfo=BRISBANE)) is True
+    assert scheduler.status_at(datetime(2026, 12, 9, 20, 30, tzinfo=BRISBANE)) is False
+
+
+def test_next_transition_is_the_window_start_on_the_dnsp_clock():
+    scheduler = make_melbourne_scheduler()
+    found = scheduler._find_next_transition(datetime(2026, 12, 9, 12, 0, tzinfo=BRISBANE))
+    assert found == datetime(2026, 12, 9, 14, 0, tzinfo=BRISBANE)
+
+
+async def test_sensor_gives_the_scheduler_the_dnsp_time_zone(hass):
+    demand = {"window_start": "15:00", "window_end": "21:00", "days": "all", "season_months": None}
+    sensor = OecDemandWindowStatusSensor(FakeCoordinator({"demand": demand}), FakeEntry())
+    sensor.hass = hass
+
+    await sensor.async_added_to_hass()
+    try:
+        assert sensor._scheduler.time_zone == MELBOURNE
+    finally:
+        await sensor.async_will_remove_from_hass()

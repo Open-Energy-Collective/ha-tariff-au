@@ -1,7 +1,7 @@
 """Demand charge tracker — monitors power and calculates peak demand."""
 
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, tzinfo
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, callback
@@ -17,6 +17,11 @@ SAMPLE_INTERVAL = timedelta(seconds=30)
 
 # How far ahead to search for the next demand-window transition.
 _SEARCH_HORIZON_DAYS = 400
+
+
+def on_dnsp_clock(when: datetime, time_zone: tzinfo | None) -> datetime:
+    """Return `when` in the DNSP's time zone, the clock tariff windows are stated on."""
+    return when.astimezone(time_zone) if time_zone else when
 
 
 def is_in_demand_window(
@@ -59,10 +64,11 @@ class DemandWindowScheduler:
     by up to its full update interval).
     """
 
-    def __init__(self, hass: HomeAssistant, on_transition) -> None:
+    def __init__(self, hass: HomeAssistant, on_transition, time_zone: tzinfo | None = None) -> None:
         """Initialize."""
         self.hass = hass
         self._on_transition = on_transition
+        self.time_zone = time_zone
         self.window_start: time | None = None
         self.window_end: time | None = None
         self.days: str | None = None
@@ -84,10 +90,17 @@ class DemandWindowScheduler:
 
     def status_at(self, when: datetime) -> bool:
         """Return whether `when` is inside the demand window."""
-        return is_in_demand_window(when, self.window_start, self.window_end, self.days, self.season_months)
+        return is_in_demand_window(
+            on_dnsp_clock(when, self.time_zone),
+            self.window_start,
+            self.window_end,
+            self.days,
+            self.season_months,
+        )
 
     def _find_next_transition(self, now: datetime) -> datetime | None:
         """Find the exact instant the window status next flips, searching forward."""
+        now = on_dnsp_clock(now, self.time_zone)
         current_status = self.status_at(now)
         daily_boundaries = sorted({time(0, 0), self.window_start, self.window_end})
 
@@ -153,6 +166,7 @@ class DemandTracker:
         days: str,
         season_months: list[int] | None,
         billing_day: int,
+        time_zone: tzinfo | None = None,
     ) -> None:
         """Initialize demand tracker."""
         self.hass = hass
@@ -163,6 +177,7 @@ class DemandTracker:
         self.days = days
         self.season_months = season_months
         self.billing_day = billing_day
+        self.time_zone = time_zone
 
         # State
         self.month_peak_kw: float = 0.0
@@ -187,7 +202,11 @@ class DemandTracker:
     def _is_in_demand_window(self, now: datetime) -> bool:
         """Check if current datetime is within the demand measurement window."""
         return is_in_demand_window(
-            now, self.window_start, self.window_end, self.days, self.season_months
+            on_dnsp_clock(now, self.time_zone),
+            self.window_start,
+            self.window_end,
+            self.days,
+            self.season_months,
         )
 
     def _get_block_start(self, now: datetime) -> datetime:

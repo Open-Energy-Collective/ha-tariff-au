@@ -47,6 +47,7 @@ async def async_setup_demand_sensors(
         days=demand["days"],
         season_months=season_months,
         billing_day=billing_day,
+        time_zone=coordinator.dnsp_time_zone,
     )
 
     entities = [
@@ -199,7 +200,7 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return demand surcharge per kWh (from API calculation)."""
+        """Return rate / window hours per month, as tariff-service's demand-surcharge does."""
         if not self.coordinator.data:
             return None
 
@@ -224,9 +225,9 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
         else:
             hours_per_day = (24 - start.hour - start.minute / 60) + (end.hour + end.minute / 60)
 
-        window_hours_per_month = hours_per_day * 30
-        monthly_charge = peak_kw * demand["rate"]
-        return round(monthly_charge / window_hours_per_month, 5)
+        # Days the window runs in a 30-day month: weekdays 5/7, weekends 2/7.
+        window_days = {"weekdays": 30 * 5 / 7, "weekends": 30 * 2 / 7}.get(self._tracker.days, 30)
+        return round(demand["rate"] / (hours_per_day * window_days), 5)
 
     @property
     def extra_state_attributes(self) -> dict:

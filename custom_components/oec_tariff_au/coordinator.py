@@ -1,12 +1,13 @@
 """Data update coordinator for OEC Tariff."""
 
 import logging
-from datetime import timedelta
+from datetime import timedelta, tzinfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_API_URL, CONF_DNSP, CONF_TARIFF, DEFAULT_API_URL, DEFAULT_SCAN_INTERVAL
 
@@ -23,6 +24,7 @@ class OecTariffCoordinator(DataUpdateCoordinator):
         self.tariff = entry.data[CONF_TARIFF]
         self._session = async_get_clientsession(hass)
         self.tariff_detail: dict | None = None
+        self.dnsp_time_zone: tzinfo | None = None
 
         super().__init__(
             hass,
@@ -30,6 +32,24 @@ class OecTariffCoordinator(DataUpdateCoordinator):
             name=f"OEC Tariff ({self.dnsp}/{self.tariff})",
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
+
+    async def _async_resolve_time_zone(self) -> None:
+        """Set dnsp_time_zone from the API. Demand windows are stated on the DNSP's clock."""
+        try:
+            async with self._session.get(f"{self.api_url}/dnsps", timeout=10) as resp:
+                if resp.status != 200:
+                    raise UpdateFailed(f"API returned {resp.status}: {await resp.text()}")
+                dnsps = await resp.json()
+        except UpdateFailed:
+            raise
+        except Exception as err:
+            raise UpdateFailed(f"Error fetching DNSPs: {err}") from err
+
+        name = next((d.get("timezone") for d in dnsps if d.get("code") == self.dnsp), None)
+        time_zone = await dt_util.async_get_time_zone(name) if name else None
+        if time_zone is None:
+            raise UpdateFailed(f"No time zone for DNSP {self.dnsp}")
+        self.dnsp_time_zone = time_zone
 
     async def _async_update_data(self) -> dict:
         """Fetch current rate from OEC API."""
@@ -49,6 +69,9 @@ class OecTariffCoordinator(DataUpdateCoordinator):
                 rate_data = await resp.json()
         except Exception as err:
             raise UpdateFailed(f"Error fetching current rate: {err}") from err
+
+        if self.dnsp_time_zone is None:
+            await self._async_resolve_time_zone()
 
         # Fetch tariff detail (less frequently — only if not cached)
         if self.tariff_detail is None:

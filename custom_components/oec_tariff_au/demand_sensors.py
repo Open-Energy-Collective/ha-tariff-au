@@ -166,6 +166,7 @@ class OecMonthlyDemandChargeSensor(OecDemandBaseSensor):
         self._attr_name = "Monthly Demand Charge"
         self._attr_native_unit_of_measurement = "$"
         self._attr_device_class = SensorDeviceClass.MONETARY
+        self._attr_state_class = SensorStateClass.TOTAL
         self._attr_suggested_display_precision = 2
         self._attr_icon = "mdi:currency-usd"
 
@@ -194,7 +195,7 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
         super().__init__(coordinator, entry, tracker, "demand_surcharge_per_kwh")
         self._attr_name = "Demand Surcharge"
         self._attr_native_unit_of_measurement = "$/kWh"
-        self._attr_device_class = SensorDeviceClass.MONETARY
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_suggested_display_precision = 3
         self._attr_icon = "mdi:lightning-bolt"
 

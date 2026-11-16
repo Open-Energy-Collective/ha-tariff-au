@@ -7,9 +7,19 @@ permits None or 'total') -- logged as a WARNING the first time each entity's
 watching live logs. These tests exercise the same code path
 (SensorEntity.state, homeassistant/components/sensor/__init__.py) against a
 real hass instance and fail if that warning reappears for any sensor.
+
+ha-tariff-au#17: the fix for #6 dropped state_class from the price sensors, so
+HA stopped their long-term statistics and raised a repair on entities that
+had them. $/kWh, $/day and $/kW/month are prices per unit, not amounts of
+money: those four take state_class MEASUREMENT and no device_class. Monthly
+Demand Charge ($) is an amount of money: it stays MONETARY and takes TOTAL,
+the one state class HA allows with it.
 """
 
 import logging
+
+import pytest
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 
 from custom_components.oec_tariff_au.demand_sensors import (
     OecDemandSurchargePerKwhSensor,
@@ -63,6 +73,40 @@ def _assert_state_class_valid(hass, caplog, entity, entity_id):
     with caplog.at_level(logging.WARNING):
         entity.state  # noqa: B018 -- accessing the property is the point
     assert _INVALID_STATE_CLASS_MSG not in caplog.text
+
+
+def _price_sensors():
+    detail = {
+        "daily_supply_charge": 1.10,
+        "demand": {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"},
+    }
+    coordinator = FakeCoordinator(rate={"rate": 0.35}, detail=detail)
+    entry = FakeEntry()
+    return {
+        "current_rate": OecCurrentRateSensor(coordinator, entry),
+        "daily_supply_charge": OecDailySupplyChargeSensor(coordinator, entry),
+        "demand_rate": OecDemandRateSensor(coordinator, entry),
+        "demand_surcharge_per_kwh": OecDemandSurchargePerKwhSensor(
+            coordinator, entry, make_tracker()
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "key", ["current_rate", "daily_supply_charge", "demand_rate", "demand_surcharge_per_kwh"]
+)
+def test_price_sensor_keeps_long_term_statistics(hass, caplog, key):
+    sensor = _price_sensors()[key]
+    assert sensor.state_class == SensorStateClass.MEASUREMENT
+    assert sensor.device_class is None
+    _assert_state_class_valid(hass, caplog, sensor, f"sensor.{key}")
+
+
+def test_monthly_demand_charge_stays_monetary_and_keeps_statistics():
+    coordinator = FakeCoordinator(detail={"demand": {"rate": 7.434}})
+    sensor = OecMonthlyDemandChargeSensor(coordinator, FakeEntry(), make_tracker())
+    assert sensor.device_class == SensorDeviceClass.MONETARY
+    assert sensor.state_class == SensorStateClass.TOTAL
 
 
 def test_current_rate_sensor_has_valid_state_class(hass, caplog):

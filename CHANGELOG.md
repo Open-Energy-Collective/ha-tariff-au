@@ -2,6 +2,11 @@
 
 Versions follow SemVer. Entries start at 1.2.2; earlier releases are on the GitHub Releases page.
 
+## [1.2.4] - 2026-11-17
+
+### Fixed
+- Current Rate, Daily Supply Charge, Demand Rate, Demand Surcharge and Monthly Demand Charge record long-term statistics again. Home Assistant's "no longer has a state class" repair clears after the update, and existing statistics continue.
+
 ## [1.2.3] - 2026-11-09
 
 ### Fixed

@@ -45,7 +45,7 @@ class DemandManager:
             key = charge_key(charge)
             if key not in self.trackers:
                 self.trackers[key] = ChargeTracker(key, charge)
-        self._first_key: ChargeKey | None = next(iter(self.trackers), None)
+        self._detail_keys: list[ChargeKey] = list(self.trackers)
         self.detail_charges: Callable[[], list[dict] | None] = detail_charges or (
             lambda: demand_charges
         )
@@ -184,6 +184,17 @@ class DemandManager:
                 unsub()
                 setattr(self, name, None)
 
+    def _legacy_restore_key(self) -> ChargeKey | None:
+        """The key a 1.2.x blob restores onto: the first detail key the cache lists now.
+
+        Falls back to the first detail key when the cache lists none of them.
+        """
+        cached = self.cache.charges(dt_util.now())
+        listed = [k for k in self._detail_keys if k in cached and k in self.trackers]
+        if listed:
+            return listed[0]
+        return next((k for k in self._detail_keys if k in self.trackers), None)
+
     def save_state(self) -> dict:
         """Return state for HA storage."""
         return {
@@ -201,13 +212,18 @@ class DemandManager:
         }
 
     def restore_state(self, data: dict) -> None:
-        """Restore a saved blob: version 2, or a 1.2.x single-tracker blob."""
+        """Restore a saved blob: version 2, or a 1.2.x single-tracker blob.
+
+        A 1.2.x blob holds the single tracker's state, so it goes to the charge in season
+        now (see `_legacy_restore_key`).
+        """
         last_reset = data.get("last_reset")
         self.last_reset = datetime.fromisoformat(last_reset) if last_reset else None
 
         if "version" not in data:
-            if self._first_key is not None and self._first_key in self.trackers:
-                self.trackers[self._first_key].restore_state(data)
+            key = self._legacy_restore_key()
+            if key is not None:
+                self.trackers[key].restore_state(data)
             return
 
         for saved in data.get("trackers", []):

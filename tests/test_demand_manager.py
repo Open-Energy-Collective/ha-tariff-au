@@ -365,6 +365,31 @@ async def test_restore_1_2_x_blob_goes_to_first_charge(hass):
     assert manager.last_reset == datetime.fromisoformat("2026-11-01T00:00:30+11:00")
 
 
+async def test_restore_1_2_x_blob_in_off_season_goes_to_charge_in_season(hass, freezer):
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=ZoneInfo("Australia/Sydney"))
+    manager, _, _ = await _setup(hass, N72, now)
+    blob = {"month_peak_kw": 6.2, "last_reset": "2026-07-01T00:00:30+10:00"}
+    freezer.move_to(now)
+
+    manager.restore_state(blob)
+
+    summer, winter = (manager.trackers[charge_key(c)] for c in N72["demand_charges"])
+    assert winter.month_peak_kw == 6.2
+    assert summer.month_peak_kw == 0.0
+
+
+async def test_restore_1_2_x_blob_without_cover_goes_to_first_charge(hass, freezer):
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=ZoneInfo("Australia/Sydney"))
+    manager, _, _ = await _setup(hass, N72, now)
+    freezer.move_to(datetime(2026, 9, 10, 12, 0, tzinfo=now.tzinfo))
+
+    manager.restore_state({"month_peak_kw": 6.2})
+
+    summer, winter = (manager.trackers[charge_key(c)] for c in N72["demand_charges"])
+    assert summer.month_peak_kw == 6.2
+    assert winter.month_peak_kw == 0.0
+
+
 async def test_restore_v2_keeps_dropped_rolling_key(hass):
     now = datetime(2027, 1, 15, 18, 0, tzinfo=ZoneInfo("Australia/Sydney"))
     rolling = {**EA302["demand_charges"][0], "rate": 12.5}

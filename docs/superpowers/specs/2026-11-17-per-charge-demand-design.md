@@ -120,7 +120,7 @@ For a single-charge tariff with no season, the values match today's, except Dema
 
 ### Upgrade
 
-The restored state from 1.2.x (one tracker) goes to the first charge in `demand_charges` order, kW or kVA. Its saved blob shape stays readable. Other charges start at zero. The CHANGELOG notes the change to Demand Rate's attributes.
+The restored state from 1.2.x (one tracker) goes to the first charge in `demand_charges` order, kW or kVA, that the cached windows list at restore. When the cache lists none of them, it goes to the first charge in `demand_charges` order. Its saved blob shape stays readable. Other charges start at zero. The CHANGELOG notes the change to Demand Rate's attributes.
 
 ## Contract changes
 
@@ -148,7 +148,7 @@ The restored state from 1.2.x (one tracker) goes to the first charge in `demand_
   - no cover means no measurement and Demand Window unavailable;
   - a response without `charges` is treated as no cover.
 - The billing reset fetches the new month and rolls every tracker.
-- The upgrade moves a 1.2.x blob onto the first charge.
+- The upgrade moves a 1.2.x blob onto the first charge in season, or the first charge without cover.
 - Every test that covers the deleted `is_in_demand_window` is removed or rewritten against cached windows.
 
 ## Decisions
@@ -163,7 +163,7 @@ The restored state from 1.2.x (one tracker) goes to the first charge in `demand_
 - Demand Rate shows the highest in-season kW rate.
 - Month Peak Demand shows the highest chargeable peak, with a per-charge breakdown in attributes.
 - Demand Surcharge uses exact window hours.
-- 1.2.x state migrates to the first charge.
+- 1.2.x state migrates to the first charge in season.
 - On a 404 for part of the billing month, one retry ending at 1 July.
 - The rate comes from the latest windows entry; a dropped key bills until the reset.
 - Fixtures are hand-written from #80, re-recorded after `0.10.0` deploys.

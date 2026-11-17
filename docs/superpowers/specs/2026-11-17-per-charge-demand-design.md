@@ -96,8 +96,8 @@ A charge is keyed by `(period, months)`. `months` is `null` or a sorted tuple. T
   - `peak_period: month`: this billing month's peak.
   - `peak_period: rolling_12_months`: the highest of this month and the last 12 rolled-over months.
 - **Billing reset.** Every tracker resets on the integration's billing day, as today.
-- **Charge.** The month's charge is the chargeable peak times the charge's rate in the latest `charges` entry for its key, so the version in force now. The daily windows refresh keeps it current; the tariff detail fetched at setup is not the source of the rate (my call).
-- **Key change mid-month.** When a new version drops a key (a 1 July reform redefining `months`), that tracker keeps its peak and its last rate until the billing reset, then is removed. A new key starts at zero (my call).
+- **Charge.** The month's charge is the chargeable peak times the charge's rate in the latest `charges` entry for its key, so the version in force now. The daily windows refresh keeps it current. A key the cached month does not list takes its rate from the latest tariff detail (my call).
+- **Key change mid-month.** A key is dropped when the latest tariff detail's `demand_charges` no longer lists it (a 1 July reform redefining `months`). A dropped key's tracker keeps its peak and its last rate until the billing reset, then is removed. A charge out of season is absent from `charges` but listed in the tariff detail, so it keeps its tracker and its rolling history. The tariff detail is refetched at most once every 24 hours, and a failed refetch keeps the previous detail. A new key starts at zero (my call).
 - **kVA.** A `unit: kVA` charge gets a tracker fed by the kW power entity, and its attributes carry `"measured_as": "kW"`. kW never exceeds kVA, so its charge reads low (the maintainer's decision, 2026-11-17).
 
 ### Sensors

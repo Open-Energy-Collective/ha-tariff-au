@@ -247,30 +247,80 @@ async def test_dropped_key_bills_until_reset(hass):
     sydney = ZoneInfo("Australia/Sydney")
     now = datetime(2026, 11, 17, 17, 0, tzinfo=sydney)
     summer, winter = N72["demand_charges"]
-    kept = [{**winter, "rate": 3.0}]
+    # A reform moves October into summer: the old summer key is dropped, a new one added.
+    reformed = {**summer, "months": [1, 2, 3, 10, 11, 12], "rate": 3.0}
     charges = list(N72["demand_charges"])
+    detail = list(N72["demand_charges"])
     manager, cache, _ = await _setup(hass, N72, now, charges)
+    manager.detail_charges = lambda: detail
     manager.start()
     _power(hass, 5.0)
     manager._async_sample(now)
     _tracker(manager, summer).flush()
 
-    # The tariff drops the summer charge; the next refresh, which also fetches
-    # December, no longer holds it.
-    charges[:] = kept
+    # The next refresh, which also fetches December, and the tariff detail list the reform.
+    charges[:] = [reformed, winter]
+    detail[:] = [reformed, winter]
     await cache.async_refresh(datetime(2026, 11, 30, 12, 0, tzinfo=sydney))
 
     dropped = _tracker(manager, summer)
     assert dropped.month_peak_kw == 5.0
     assert dropped.charge["rate"] == 5.454
-    assert _tracker(manager, winter).charge["rate"] == 3.0
+    assert _tracker(manager, reformed).charge["rate"] == 3.0
 
     manager._async_sample(datetime(2026, 12, 1, 0, 0, 30, tzinfo=sydney))
     await hass.async_block_till_done()
 
     assert charge_key(summer) not in manager.trackers
-    assert list(manager.trackers) == [charge_key(winter)]
+    assert list(manager.trackers) == [charge_key(winter), charge_key(reformed)]
     manager.stop()
+
+
+async def _lbad_in_march(hass):
+    """An LBAD manager on 31 March with April cached and a 6 kW peak on each charge."""
+    adelaide = ZoneInfo("Australia/Adelaide")
+    now = datetime(2027, 3, 31, 18, 0, tzinfo=adelaide)
+    manager, cache, _ = await _setup(hass, LBAD, now)
+    for tracker in manager.trackers.values():
+        tracker.month_peak_kw = 6.0
+    cache.async_refresh = AsyncMock()
+    return manager, cache, datetime(2027, 4, 1, 0, 0, 30, tzinfo=adelaide)
+
+
+async def test_lbad_out_of_season_peak_survives_billing_reset(hass):
+    manager, cache, reset_at = await _lbad_in_march(hass)
+    peak, anytime = LBAD["demand_charges"]
+    assert charge_key(peak) not in cache.charges(reset_at)
+
+    manager._async_sample(reset_at)
+    await hass.async_block_till_done()
+
+    kept = _tracker(manager, peak)
+    assert kept.month_peak_kw == 0.0
+    assert kept.chargeable_demand == 6.0
+    assert list(manager.trackers) == [charge_key(peak), charge_key(anytime)]
+
+
+async def test_key_absent_from_cache_and_detail_is_removed_at_reset(hass):
+    manager, _, reset_at = await _lbad_in_march(hass)
+    peak, anytime = LBAD["demand_charges"]
+    manager.detail_charges = lambda: [anytime]
+
+    manager._async_sample(reset_at)
+    await hass.async_block_till_done()
+
+    assert list(manager.trackers) == [charge_key(anytime)]
+
+
+async def test_out_of_season_tracker_takes_the_detail_fields(hass):
+    manager, _, reset_at = await _lbad_in_march(hass)
+    peak, anytime = LBAD["demand_charges"]
+    manager.detail_charges = lambda: [{**peak, "rate": 11.0}, anytime]
+
+    manager._async_sample(reset_at)
+    await hass.async_block_till_done()
+
+    assert _tracker(manager, peak).charge["rate"] == 11.0
 
 
 async def test_restore_v2_round_trip(hass):

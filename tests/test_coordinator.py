@@ -354,3 +354,54 @@ async def test_fetch_demand_windows_honours_shared_backoff(hass, aioclient_mock)
 
     assert err.value.status is None
     assert calls_to(aioclient_mock, WINDOWS_URL) == []
+
+
+# Tariff detail refetch (#16): an out-of-season charge is known only from the detail.
+
+
+def mock_rate_and_detail_v2(aioclient_mock):
+    aioclient_mock.get(RATE_URL, json={"rate": 0.1343})
+    aioclient_mock.get(DETAIL_URL, json={"demand_charges": []})
+
+
+async def test_tariff_detail_is_refetched_once_a_day(hass, aioclient_mock, freezer):
+    mock_all_ok(aioclient_mock)
+    coordinator = make_coordinator(hass)
+
+    await coordinator._async_update_data()
+    freezer.tick(timedelta(hours=23))
+    await coordinator._async_update_data()
+    assert len(calls_to(aioclient_mock, DETAIL_URL)) == 1
+
+    aioclient_mock.clear_requests()
+    mock_rate_and_detail_v2(aioclient_mock)
+    freezer.tick(timedelta(hours=1))
+    data = await coordinator._async_update_data()
+
+    assert len(calls_to(aioclient_mock, DETAIL_URL)) == 1
+    assert coordinator.tariff_detail == {"demand_charges": []}
+    assert data["detail"] == {"demand_charges": []}
+
+
+@pytest.mark.parametrize("status", [500, None])
+async def test_failed_tariff_detail_refetch_keeps_the_previous_detail(
+    hass, aioclient_mock, freezer, caplog, status
+):
+    mock_all_ok(aioclient_mock)
+    coordinator = make_coordinator(hass)
+    await coordinator._async_update_data()
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(RATE_URL, json={"rate": 0.1343})
+    if status is None:
+        aioclient_mock.get(DETAIL_URL, exc=TimeoutError())
+    else:
+        aioclient_mock.get(DETAIL_URL, status=status)
+    freezer.tick(timedelta(hours=24))
+    data = await coordinator._async_update_data()
+
+    assert len(calls_to(aioclient_mock, DETAIL_URL)) == 1
+    assert data["detail"] == {"demand": None}
+    assert any(
+        r.levelno == logging.WARNING and "tariff detail" in r.getMessage() for r in caplog.records
+    )

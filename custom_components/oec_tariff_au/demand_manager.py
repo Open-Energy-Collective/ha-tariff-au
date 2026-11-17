@@ -29,8 +29,13 @@ class DemandManager:
         cache: DemandWindowCache,
         demand_charges: list[dict],
         billing_day: int,
+        detail_charges: Callable[[], list[dict] | None] | None = None,
     ) -> None:
-        """Create one tracker per charge key, in tariff detail order."""
+        """Create one tracker per charge key, in tariff detail order.
+
+        `detail_charges` returns the latest tariff detail's `demand_charges` (None when
+        unknown); it defaults to `demand_charges`.
+        """
         self.hass = hass
         self.power_entity_id = power_entity_id
         self.cache = cache
@@ -41,6 +46,9 @@ class DemandManager:
             if key not in self.trackers:
                 self.trackers[key] = ChargeTracker(key, charge)
         self._first_key: ChargeKey | None = next(iter(self.trackers), None)
+        self.detail_charges: Callable[[], list[dict] | None] = detail_charges or (
+            lambda: demand_charges
+        )
         self.last_reset: datetime | None = None
 
         self._unsub_timer: Callable[[], None] | None = None
@@ -52,15 +60,21 @@ class DemandManager:
         """Align the trackers with the cached charges at `now`.
 
         Updates the charge of each cached key and adds a tracker for a new one. A key
-        missing from the cache is left alone; the billing reset removes it.
+        missing from the cache but listed by the tariff detail (out of season) takes the
+        detail's charge. Any other key is left alone; the billing reset removes it.
         """
         when = now or dt_util.now()
-        for key, cached in self.cache.charges(when).items():
+        cached_charges = self.cache.charges(when)
+        for key, cached in cached_charges.items():
             tracker = self.trackers.get(key)
             if tracker is None:
                 self.trackers[key] = ChargeTracker(key, cached.charge)
             else:
                 tracker.update_charge(cached.charge)
+        for charge in self.detail_charges() or []:
+            key = charge_key(charge)
+            if key not in cached_charges and key in self.trackers:
+                self.trackers[key].update_charge(charge)
 
     def _is_new_billing_month(self, now: datetime) -> bool:
         """Check if we've crossed a billing cycle boundary."""
@@ -77,15 +91,20 @@ class DemandManager:
         ) <= now
 
     def _reset_billing_month(self, now: datetime) -> None:
-        """Close the month on every tracker, drop keys the cache no longer holds, refresh."""
+        """Close the month on every tracker, drop keys the tariff no longer lists, refresh.
+
+        A key is dropped when neither the cached month nor the latest tariff detail lists
+        it. An out-of-season charge is absent from the cache but listed by the detail.
+        """
         for tracker in self.trackers.values():
             tracker.flush()
             tracker.reset_billing_month(now)
         self.last_reset = now
-        # Without cover the cache cannot say which keys are gone, so none are removed.
-        if self.cache.covers(now):
-            cached = self.cache.charges(now)
-            for key in [k for k in self.trackers if k not in cached]:
+        # Without cover or a detail, which keys are gone is unknown, so none are removed.
+        detail = self.detail_charges()
+        if self.cache.covers(now) and detail is not None:
+            listed = set(self.cache.charges(now)) | {charge_key(c) for c in detail}
+            for key in [k for k in self.trackers if k not in listed]:
                 _LOGGER.info("Demand charge %s is no longer in the tariff; removed", key)
                 del self.trackers[key]
         self.hass.async_create_task(self.cache.async_refresh(now))

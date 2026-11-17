@@ -29,6 +29,9 @@ _LOGGER = logging.getLogger(__name__)
 # which sets the entry up again with a new coordinator, still honours it.
 BACKOFF_UNTIL = f"{DOMAIN}_backoff_until"
 
+# The tariff detail lists every demand charge, in season or not; it is refetched this often.
+DETAIL_REFRESH_AGE = timedelta(hours=24)
+
 
 def parse_retry_after(value: str | None, now: datetime) -> float | None:
     """Seconds to wait from a Retry-After header (delay-seconds or HTTP-date), None if unusable."""
@@ -64,6 +67,7 @@ class OecTariffCoordinator(DataUpdateCoordinator):
         self.tariff = entry.data[CONF_TARIFF]
         self._session = async_get_clientsession(hass)
         self.tariff_detail: dict | None = None
+        self._detail_fetched_at: datetime | None = None
         self.dnsp_time_zone: tzinfo | None = None
         self._backoff_key = self.api_url.rstrip("/")
         self._backoff_until: dict[str, datetime] = hass.data.setdefault(BACKOFF_UNTIL, {})
@@ -157,6 +161,32 @@ class OecTariffCoordinator(DataUpdateCoordinator):
         except Exception as err:
             raise DemandWindowsUnavailable(f"Error fetching demand windows: {err}") from err
 
+    async def _async_refresh_tariff_detail(self) -> None:
+        """Fetch the tariff detail when it is missing or 24 h old.
+
+        A failed fetch keeps the previous detail, logs a warning and is retried on the
+        next update.
+        """
+        now = dt_util.utcnow()
+        if self._detail_fetched_at is not None and now - self._detail_fetched_at < DETAIL_REFRESH_AGE:
+            return
+        detail_url = f"{self.api_url}/tariffs/{self.dnsp}/{self.tariff}"
+        try:
+            async with self._session.get(detail_url, timeout=10) as resp:
+                if resp.status == 429:
+                    self._start_backoff(resp)
+                    return
+                if resp.status != 200:
+                    _LOGGER.warning(
+                        "Failed to fetch tariff detail (API returned %s), will retry next update",
+                        resp.status,
+                    )
+                    return
+                self.tariff_detail = await resp.json()
+                self._detail_fetched_at = now
+        except Exception as err:
+            _LOGGER.warning("Failed to fetch tariff detail (%s), will retry next update", err)
+
     async def _async_update_data(self) -> dict:
         """Fetch current rate from OEC API."""
         from datetime import datetime, timezone
@@ -188,17 +218,7 @@ class OecTariffCoordinator(DataUpdateCoordinator):
         if self.dnsp_time_zone is None:
             await self._async_resolve_time_zone()
 
-        # Fetch tariff detail (less frequently — only if not cached)
-        if self.tariff_detail is None:
-            detail_url = f"{self.api_url}/tariffs/{self.dnsp}/{self.tariff}"
-            try:
-                async with self._session.get(detail_url, timeout=10) as resp:
-                    if resp.status == 429:
-                        self._start_backoff(resp)
-                    elif resp.status == 200:
-                        self.tariff_detail = await resp.json()
-            except Exception:
-                _LOGGER.warning("Failed to fetch tariff detail, will retry next update")
+        await self._async_refresh_tariff_detail()
 
         return {
             "rate": rate_data,

@@ -1,6 +1,7 @@
 """Tests for the demand sensors over a DemandManager: values, attributes and lifecycle."""
 
 from datetime import date, datetime
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import State
@@ -95,6 +96,26 @@ async def test_monthly_charge_is_zero_with_no_peak(hass):
     sensor = OecMonthlyDemandChargeSensor(coordinator, FakeEntry(), manager)
 
     assert sensor.native_value == 0.0
+
+
+async def test_lbad_monthly_charge_keeps_out_of_season_peak_across_reset(hass):
+    adelaide = ZoneInfo("Australia/Adelaide")
+    manager = await _manager(hass, LBAD, datetime(2027, 3, 31, 18, 0, tzinfo=adelaide))
+    peak, anytime = LBAD["demand_charges"]
+    _set_peak(manager, peak, 6.0)
+    _set_peak(manager, anytime, 2.0)
+    manager.cache.async_refresh = AsyncMock()
+    sensor = OecMonthlyDemandChargeSensor(FakeCoordinator(LBAD["demand_charges"]), FakeEntry(), manager)
+
+    manager._async_sample(datetime(2027, 4, 1, 0, 0, 30, tzinfo=adelaide))
+    await hass.async_block_till_done()
+
+    # Both charges bill on the last 12 months' peak: 6.0 * 10.224 + 2.0 * 1.89.
+    assert sensor.native_value == 65.12
+    assert sensor.extra_state_attributes["charges"] == [
+        {"period": "peak", "months": [1, 2, 3, 11, 12], "amount": 61.34},
+        {"period": "anytime", "months": None, "amount": 3.78},
+    ]
 
 
 # --- Demand Surcharge -------------------------------------------------------
@@ -350,3 +371,14 @@ async def test_setup_defaults_billing_day_when_unset(hass):
     )
 
     assert manager.billing_day == 1
+
+
+async def test_setup_manager_reads_the_latest_tariff_detail(hass):
+    coordinator = FakeCoordinator(N72["demand_charges"])
+    manager = await async_setup_demand_sensors(
+        hass, FakeEntry({"power_entity": POWER}), coordinator, _cache(hass), FakeAddEntities()
+    )
+
+    coordinator.tariff_detail = {"demand_charges": N72["demand_charges"][:1]}
+
+    assert manager.detail_charges() == N72["demand_charges"][:1]

@@ -45,6 +45,7 @@ async def async_setup_demand_sensors(
         cache=cache,
         demand_charges=demand_charges,
         billing_day=entry.data.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY),
+        detail_charges=lambda: (coordinator.tariff_detail or {}).get("demand_charges"),
     )
 
     async_add_entities(

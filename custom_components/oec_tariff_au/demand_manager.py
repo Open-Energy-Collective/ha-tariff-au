@@ -100,9 +100,10 @@ class DemandManager:
             tracker.flush()
             tracker.reset_billing_month(now)
         self.last_reset = now
-        # Without cover or a detail, which keys are gone is unknown, so none are removed.
+        # Without cover or a detail listing charges, which keys are gone is unknown, so
+        # none are removed. An empty or missing list counts as no detail.
         detail = self.detail_charges()
-        if self.cache.covers(now) and detail is not None:
+        if self.cache.covers(now) and detail:
             listed = set(self.cache.charges(now)) | {charge_key(c) for c in detail}
             for key in [k for k in self.trackers if k not in listed]:
                 _LOGGER.info("Demand charge %s is no longer in the tariff; removed", key)

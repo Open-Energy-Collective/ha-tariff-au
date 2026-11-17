@@ -323,6 +323,18 @@ async def test_key_absent_from_cache_and_detail_is_removed_at_reset(hass):
     assert list(manager.trackers) == [charge_key(anytime)]
 
 
+async def test_empty_detail_charges_never_drop_a_charge(hass):
+    manager, _, reset_at = await _lbad_in_march(hass)
+    peak, anytime = LBAD["demand_charges"]
+    manager.detail_charges = lambda: []
+
+    manager._async_sample(reset_at)
+    await hass.async_block_till_done()
+
+    assert list(manager.trackers) == [charge_key(peak), charge_key(anytime)]
+    assert _tracker(manager, peak).chargeable_demand == 6.0
+
+
 async def test_out_of_season_tracker_takes_the_detail_fields(hass):
     manager, _, reset_at = await _lbad_in_march(hass)
     peak, anytime = LBAD["demand_charges"]

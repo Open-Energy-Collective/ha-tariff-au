@@ -12,9 +12,10 @@ import pytest
 from custom_components.oec_tariff_au.coordinator import DemandWindowsUnavailable
 from custom_components.oec_tariff_au.window_cache import DemandWindowCache
 
-from .fixtures import NASN12, windows_body
+from .fixtures import NASN12, TARIFFS, tariff_zone, windows_body
 
 MELBOURNE = ZoneInfo("Australia/Melbourne")
+SAPN = TARIFFS["LBAD"]
 ENTRY_ID = "entry1"
 STORE_KEY = f"oec_tariff_au.demand_windows.{ENTRY_ID}"
 
@@ -134,6 +135,26 @@ async def test_404_retries_to_1_july(hass, hass_storage):
     assert retried_end.utcoffset() == timedelta(hours=10)
     assert cache.covers(june_now)
     assert not cache.covers(first_july)
+
+
+async def test_404_retry_follows_the_distributors_zone_not_homes(hass, hass_storage):
+    sydney, adelaide = ZoneInfo("Australia/Sydney"), tariff_zone(SAPN)
+    await hass.config.async_set_time_zone("Australia/Sydney")
+    june_now = datetime(2027, 6, 20, 12, 0, tzinfo=sydney)
+    start = datetime(2027, 6, 15, tzinfo=sydney)
+    coordinator = SimpleNamespace(
+        async_fetch_demand_windows=AsyncMock(
+            side_effect=[DemandWindowsUnavailable("not found", 404), _body(start, start)]
+        ),
+        dnsp_time_zone=adelaide,
+    )
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 15)
+
+    await cache.async_refresh(june_now)
+
+    retried_end = _ranges(coordinator)[1][1]
+    assert retried_end == datetime(2027, 7, 1, tzinfo=adelaide)
+    assert retried_end.utcoffset() == timedelta(hours=9, minutes=30)
 
 
 async def test_second_404_leaves_no_cover(hass, hass_storage):

@@ -194,7 +194,7 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
     to "Active"/"Inactive" for display, via the `entity.sensor` block in
     strings.json.
 
-    The state follows the cached windows of every charge. It is unknown while the
+    The state follows the cached windows of every charge. It is unavailable while the
     cache does not cover now.
     """
 
@@ -230,14 +230,19 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
 
     @callback
     def _schedule_transition(self) -> None:
-        """Schedule a state write at the next bound of any charge's cached windows."""
+        """Schedule a state write at the next window bound or the end of the cached month.
+
+        The month end is where cover runs out, or where the next cached month's windows
+        take over.
+        """
         self._cancel_transition()
         now = dt_util.now()
         windows = [w for cached in self._cache.charges(now).values() for w in cached.windows]
-        when = next_transition(windows, now)
-        if when is not None:
+        candidates = [next_transition(windows, now), self._cache.month_end(now)]
+        upcoming = [when for when in candidates if when is not None]
+        if upcoming:
             self._unsub_transition = async_track_point_in_time(
-                self.hass, self._handle_transition, when
+                self.hass, self._handle_transition, min(upcoming, key=dt_util.as_utc)
             )
 
     @callback
@@ -253,13 +258,6 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
         self._schedule_transition()
         self.async_write_ha_state()
 
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Schedule a transition when none is pending, as after a billing month change."""
-        if self._unsub_transition is None:
-            self._schedule_transition()
-        super()._handle_coordinator_update()
-
     async def async_added_to_hass(self) -> None:
         """Start tracking the window bounds once added."""
         await super().async_added_to_hass()
@@ -269,6 +267,11 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
     async def async_will_remove_from_hass(self) -> None:
         """Cancel any pending scheduled transition."""
         self._cancel_transition()
+
+    @property
+    def available(self) -> bool:
+        """Return False while no cached windows cover now."""
+        return super().available and self._cache.covers(dt_util.now())
 
     @property
     def native_value(self) -> str | None:

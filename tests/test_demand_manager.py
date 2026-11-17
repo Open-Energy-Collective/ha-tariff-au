@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
+import pytest
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 
 from custom_components.oec_tariff_au.charge_tracker import ChargeTracker
@@ -154,6 +155,90 @@ async def test_billing_reset_resets_all_and_refreshes_cache(hass):
 
     assert all(t.month_peak_kw == 0.0 for t in manager.trackers.values())
     assert all(t.previous_month_peak_kw == 3.0 for t in manager.trackers.values())
+    assert manager.last_reset == reset_at
+    cache.async_refresh.assert_awaited_once_with(reset_at)
+
+
+@pytest.mark.parametrize(
+    ("state", "attributes", "expected"),
+    [
+        ("unknown", {"unit_of_measurement": "W"}, []),
+        ("unavailable", {"unit_of_measurement": "W"}, []),
+        ("not a number", {"unit_of_measurement": "W"}, []),
+        ("2500", {"unit_of_measurement": "W"}, [2.5]),
+        ("2.5", {"unit_of_measurement": "kW"}, [2.5]),
+    ],
+)
+async def test_power_reading_states(hass, state, attributes, expected):
+    now = datetime(2027, 1, 15, 18, 0, tzinfo=ZoneInfo("Australia/Adelaide"))
+    manager, _, _ = await _setup(hass, LBAD, now)
+    hass.states.async_set(POWER, state, attributes)
+
+    manager._async_sample(now)
+
+    for charge in LBAD["demand_charges"]:
+        assert _tracker(manager, charge).current_block_samples == expected
+
+
+async def test_first_sample_without_last_reset_resets(hass):
+    now = datetime(2027, 1, 15, 18, 0, tzinfo=ZoneInfo("Australia/Adelaide"))
+    manager, cache, _ = await _setup(hass, LBAD, now)
+    manager.last_reset = None
+    cache.async_refresh = AsyncMock()
+    _power(hass, 3.0)
+
+    manager._async_sample(now)
+    await hass.async_block_till_done()
+
+    assert manager.last_reset == now
+    cache.async_refresh.assert_awaited_once_with(now)
+    for charge in LBAD["demand_charges"]:
+        assert _tracker(manager, charge).current_block_samples == [3.0]
+
+
+async def test_mid_cycle_sample_does_not_reset(hass):
+    adelaide = ZoneInfo("Australia/Adelaide")
+    now = datetime(2027, 1, 15, 18, 0, tzinfo=adelaide)
+    manager, cache, _ = await _setup(hass, LBAD, now)
+    last_reset = manager.last_reset
+    anytime = _tracker(manager, LBAD["demand_charges"][1])
+    anytime.month_peak_kw = 4.0
+    cache.async_refresh = AsyncMock()
+    _power(hass, 3.0)
+
+    manager._async_sample(datetime(2027, 1, 31, 23, 59, 30, tzinfo=adelaide))
+    await hass.async_block_till_done()
+
+    assert manager.last_reset == last_reset
+    assert anytime.month_peak_kw == 4.0
+    assert anytime.previous_month_peak_kw == 0.0
+    cache.async_refresh.assert_not_awaited()
+
+
+async def test_billing_day_15_resets_across_a_calendar_month(hass):
+    adelaide = ZoneInfo("Australia/Adelaide")
+    await hass.config.async_set_time_zone("Australia/Adelaide")
+    cache = DemandWindowCache(hass, _coordinator(LBAD), ENTRY_ID, 15)
+    await cache.async_refresh(datetime(2027, 1, 20, 12, 0, tzinfo=adelaide))
+    manager = DemandManager(hass, POWER, cache, LBAD["demand_charges"], 15)
+    manager.last_reset = datetime(2027, 1, 15, tzinfo=adelaide)
+    anytime = _tracker(manager, LBAD["demand_charges"][1])
+    anytime.month_peak_kw = 4.0
+    cache.async_refresh = AsyncMock()
+    _power(hass, 1.0)
+
+    # 1 February is a new calendar month but the same billing month (15 January on).
+    manager._async_sample(datetime(2027, 2, 1, 12, 0, tzinfo=adelaide))
+    await hass.async_block_till_done()
+    assert anytime.month_peak_kw == 4.0
+    cache.async_refresh.assert_not_awaited()
+
+    reset_at = datetime(2027, 2, 15, 0, 0, 30, tzinfo=adelaide)
+    manager._async_sample(reset_at)
+    await hass.async_block_till_done()
+
+    assert anytime.month_peak_kw == 0.0
+    assert anytime.previous_month_peak_kw == 4.0
     assert manager.last_reset == reset_at
     cache.async_refresh.assert_awaited_once_with(reset_at)
 

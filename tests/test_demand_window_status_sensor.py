@@ -1,10 +1,13 @@
 """Tests for the Demand Window enum sensor over the cached per-charge windows."""
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+from custom_components.oec_tariff_au.coordinator import DemandWindowsUnavailable
 from custom_components.oec_tariff_au.sensor import OecDemandWindowStatusSensor
 from custom_components.oec_tariff_au.window_cache import DemandWindowCache
 
@@ -26,6 +29,7 @@ class FakeCoordinator:
         self.tariff = "test_tariff"
         self.tariff_detail = {"demand_charges": NASN12["demand_charges"]}
         self.data = None
+        self.last_update_success = True
 
     def async_add_listener(self, update_callback, context=None):
         """CoordinatorEntity.async_added_to_hass() needs this to register."""
@@ -50,8 +54,10 @@ async def _added_sensor(hass, cache):
     sensor.hass = hass
     sensor.entity_id = "sensor.demand_window"
     sensor.writes = []
-    sensor.async_write_ha_state = lambda: sensor.writes.append(
-        (sensor.native_value, sensor.extra_state_attributes)
+    sensor.availability = []
+    sensor.async_write_ha_state = lambda: (
+        sensor.writes.append((sensor.native_value, sensor.extra_state_attributes)),
+        sensor.availability.append(sensor.available),
     )
     await sensor.async_added_to_hass()
     return sensor
@@ -108,6 +114,7 @@ async def test_demand_window_unavailable_without_cover(hass, freezer):
     freezer.move_to(BEFORE_WINDOW)
     sensor = await _added_sensor(hass, await _cache(hass))
     try:
+        assert sensor.available is False
         assert sensor.native_value is None
         assert sensor.extra_state_attributes == {"active_charges": []}
     finally:
@@ -125,3 +132,38 @@ async def test_removal_cancels_the_pending_transition(hass, freezer):
     await hass.async_block_till_done()
 
     assert len(sensor.writes) == writes
+
+
+async def test_demand_window_unavailable_when_cover_runs_out(hass, freezer):
+    """January is cached, February is not: the state goes unavailable at 1 February."""
+    late = datetime(2027, 1, 31, 22, 0, tzinfo=MELBOURNE)
+    month_end = datetime(2027, 2, 1, tzinfo=MELBOURNE)
+    january = windows_coordinator(NASN12)
+    fetch = january.async_fetch_demand_windows.side_effect
+
+    def january_only(start, end):
+        if start.month != 1:
+            raise DemandWindowsUnavailable("unavailable", 503)
+        return fetch(start, end)
+
+    coordinator = SimpleNamespace(
+        async_fetch_demand_windows=AsyncMock(side_effect=january_only),
+        dnsp_time_zone=MELBOURNE,
+    )
+    await hass.config.async_set_time_zone("Australia/Melbourne")
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 1)
+    freezer.move_to(late)
+    await cache.async_refresh(late)
+    sensor = await _added_sensor(hass, cache)
+    try:
+        assert sensor.available is True
+        assert sensor.native_value == "inactive"
+
+        freezer.move_to(month_end)
+        async_fire_time_changed(hass, month_end)
+        await hass.async_block_till_done()
+
+        assert sensor.availability[-1] is False
+        assert sensor.writes[-1] == (None, {"active_charges": []})
+    finally:
+        await sensor.async_will_remove_from_hass()

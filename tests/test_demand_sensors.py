@@ -170,6 +170,8 @@ async def test_month_peak_is_highest_chargeable_peak(hass):
             "period": "peak",
             "months": [1, 2, 3, 11, 12],
             "unit": "kW",
+            "measurement_method": "30min_max",
+            "peak_period": "month",
             "peak": 3.25,
             "demand_recorded_at": "2027-01-12T17:00:00+11:00",
         },
@@ -177,6 +179,8 @@ async def test_month_peak_is_highest_chargeable_peak(hass):
             "period": "peak",
             "months": [4, 5, 6, 7, 8, 9, 10],
             "unit": "kW",
+            "measurement_method": "30min_max",
+            "peak_period": "month",
             "peak": 1.5,
             "demand_recorded_at": None,
         },
@@ -184,7 +188,7 @@ async def test_month_peak_is_highest_chargeable_peak(hass):
     assert attributes["billing_day"] == 1
     assert attributes["power_entity"] == POWER
     assert attributes["last_reset"] is None
-    for dropped in ("demand_window", "demand_days", "season_months"):
+    for dropped in ("demand_window", "demand_days", "season_months", "measurement_method"):
         assert dropped not in attributes
 
 

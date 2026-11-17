@@ -159,6 +159,8 @@ class OecMonthPeakDemandSensor(OecDemandBaseSensor):
             entry = {
                 **_charge_id(tracker),
                 "unit": tracker.charge.get("unit"),
+                "measurement_method": tracker.charge.get("measurement_method"),
+                "peak_period": tracker.charge.get("peak_period"),
                 "peak": tracker.chargeable_demand,
                 "demand_recorded_at": _iso(tracker.chargeable_demand_recorded_at),
             }

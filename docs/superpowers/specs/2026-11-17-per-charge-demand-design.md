@@ -128,7 +128,9 @@ The restored state from 1.2.x (one tracker) goes to the first charge in `demand_
 - **No longer consumed:** the tariff detail's `demand` object.
 - **Entity attributes (public):**
   - Demand Rate replaces `window_start`, `window_end`, `days` and `season_months` with `charges`;
+  - Demand Rate loses its top-level `measurement_method`, which each `charges` entry carries;
   - Month Peak Demand and Monthly Demand Charge gain `charges`;
+  - Month Peak Demand loses `demand_window`, `demand_days`, `season_months` and `measurement_method`, and each `charges` entry carries its own `measurement_method` and `peak_period`;
   - Demand Window gains `active_charges`.
 - **Unchanged:** entity IDs, unique IDs, units, device and state classes.
 

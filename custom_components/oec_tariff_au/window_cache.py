@@ -111,6 +111,11 @@ class DemandWindowCache:
         month = self._month_holding(when)
         return month.charges if month is not None else {}
 
+    def month_end(self, when: datetime) -> datetime | None:
+        """Return the end of the cached month holding `when`, None when none does."""
+        month = self._month_holding(when)
+        return month.end if month is not None else None
+
     def add_listener(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Call `callback` after the cache changes. Returns a function that removes it."""
         self._listeners.append(callback)

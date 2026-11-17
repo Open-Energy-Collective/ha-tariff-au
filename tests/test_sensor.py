@@ -18,6 +18,7 @@ the one state class HA allows with it.
 
 import logging
 from datetime import date, datetime, timedelta
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -217,7 +218,7 @@ SENSOR_KEYS = (
 )
 
 
-async def _setup_entry(hass, aioclient_mock, freezer):
+async def _setup_entry(hass, aioclient_mock, freezer, demand_charges=NASN12["demand_charges"]):
     """Set up a NASN12 entry with a power entity while the demand-windows request fails."""
     freezer.move_to(SETUP_NOW)
     await hass.config.async_set_time_zone("Australia/Melbourne")
@@ -228,7 +229,7 @@ async def _setup_entry(hass, aioclient_mock, freezer):
     aioclient_mock.get(f"{DEFAULT_API_URL}/dnsps", json=DNSPS)
     aioclient_mock.get(
         f"{DEFAULT_API_URL}/tariffs/ausnet/NASN12",
-        json={"code": "NASN12", "name": "NASN12", "demand_charges": NASN12["demand_charges"]},
+        json={"code": "NASN12", "name": "NASN12", "demand_charges": demand_charges},
     )
     aioclient_mock.get(WINDOWS_URL, status=503)
     hass.states.async_set("sensor.power", "1500", {"unit_of_measurement": "W"})
@@ -256,7 +257,7 @@ async def test_setup_with_no_cover_creates_entities_unavailable(hass, aioclient_
     entry, ids = await _setup_entry(hass, aioclient_mock, freezer)
 
     assert all(ids.values()), ids
-    assert hass.states.get(ids["demand_window"]).state in ("unavailable", "unknown")
+    assert hass.states.get(ids["demand_window"]).state == "unavailable"
     assert hass.states.get(ids["demand_rate"]).state == "11.473"
 
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -275,6 +276,34 @@ async def test_coordinator_update_refreshes_the_windows(hass, aioclient_mock, fr
     await hass.async_block_till_done()
 
     assert hass.states.get(ids["demand_window"]).state == "inactive"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_setup_without_demand_charges_creates_no_demand_entities(
+    hass, aioclient_mock, freezer
+):
+    entry, ids = await _setup_entry(hass, aioclient_mock, freezer, demand_charges=[])
+
+    assert ids == dict.fromkeys(SENSOR_KEYS)
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_current_rate")
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_failed_window_refresh_is_logged(hass, aioclient_mock, freezer, caplog):
+    entry, _ = await _setup_entry(hass, aioclient_mock, freezer)
+    data = hass.data[DOMAIN][entry.entry_id]
+    data["window_cache"].async_refresh = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await data["coordinator"].async_refresh()
+    await hass.async_block_till_done()
+
+    assert "Demand windows refresh failed" in caplog.text
+    assert "boom" in caplog.text
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

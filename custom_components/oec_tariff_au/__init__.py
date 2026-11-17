@@ -24,15 +24,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     billing_day = entry.data.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY)
     cache = DemandWindowCache(hass, coordinator, entry.entry_id, billing_day)
     await cache.async_load()
-    try:
-        await cache.async_refresh(dt_util.utcnow())
-    except Exception:  # setup goes on; the cache warns while it has no cover
-        _LOGGER.exception("Demand windows refresh failed at setup")
+
+    async def _async_refresh_windows() -> None:
+        """Refresh the windows, logging any failure; the cache warns while it has no cover."""
+        try:
+            await cache.async_refresh(dt_util.utcnow())
+        except Exception:
+            _LOGGER.exception("Demand windows refresh failed")
+
+    await _async_refresh_windows()
 
     @callback
     def _refresh_windows() -> None:
         """Refresh the windows on every coordinator update; the cache skips it when fresh."""
-        hass.async_create_task(cache.async_refresh(dt_util.utcnow()))
+        hass.async_create_task(_async_refresh_windows())
 
     entry.async_on_unload(coordinator.async_add_listener(_refresh_windows))
 

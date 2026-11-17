@@ -216,3 +216,60 @@ async def test_listener_called_after_change(hass, hass_storage):
     remove()
     await cache.async_refresh(NOW + timedelta(hours=25))
     assert calls == [1]
+
+
+async def test_refresh_fetches_when_next_24h_uncovered(hass, hass_storage):
+    start = datetime(2027, 6, 15, tzinfo=MELBOURNE)
+    first_july = datetime(2027, 7, 1, tzinfo=MELBOURNE)
+    now = datetime(2027, 6, 30, 12, 0, tzinfo=MELBOURNE)
+    hass_storage[STORE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": STORE_KEY,
+        "data": {
+            "fetched_at": (now - timedelta(hours=1)).isoformat(),
+            "months": [
+                {
+                    "start": start.isoformat(),
+                    "end": first_july.isoformat(),
+                    "body": _body(start, first_july),
+                }
+            ],
+        },
+    }
+    coordinator = _coordinator()
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 15)
+    await cache.async_load()
+
+    await cache.async_refresh(now)
+
+    assert _ranges(coordinator) == [(start, datetime(2027, 7, 15, tzinfo=MELBOURNE))]
+    assert cache.covers(first_july + timedelta(hours=1))
+
+
+async def test_404_after_1_july_skips_retry_and_caches_nothing(hass, hass_storage):
+    coordinator = _coordinator(DemandWindowsUnavailable("not found", 404))
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 15)
+    calls = []
+    cache.add_listener(lambda: calls.append(1))
+    now = datetime(2027, 7, 2, 12, 0, tzinfo=MELBOURNE)
+
+    await cache.async_refresh(now)
+
+    assert _ranges(coordinator) == [
+        (datetime(2027, 6, 15, tzinfo=MELBOURNE), datetime(2027, 7, 15, tzinfo=MELBOURNE))
+    ]
+    assert not cache.covers(now)
+    assert cache.fetched_at is None
+    assert STORE_KEY not in hass_storage
+    assert calls == []
+
+
+async def test_refresh_refetches_at_exactly_24h(hass, hass_storage):
+    coordinator = _coordinator()
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 1)
+
+    await cache.async_refresh(NOW)
+    await cache.async_refresh(NOW + timedelta(hours=24))
+
+    assert coordinator.async_fetch_demand_windows.call_count == 2

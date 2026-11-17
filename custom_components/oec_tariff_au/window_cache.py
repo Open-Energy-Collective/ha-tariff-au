@@ -71,19 +71,23 @@ class DemandWindowCache:
             )
 
     async def async_refresh(self, now: datetime) -> None:
-        """Fetch the billing month holding `now` (and the next, near its end) when due."""
+        """Fetch the billing month holding `now` when stale or uncovered, and the one holding
+        `now + 24 h` when that instant is uncovered."""
         changed = self._prune(now)
         start, end = billing_month_range(dt_util.as_local(now), self._billing_day)
-        stale = self.fetched_at is None or _utc(now) - _utc(self.fetched_at) > REFRESH_AGE
+        stale = self.fetched_at is None or _utc(now) - _utc(self.fetched_at) >= REFRESH_AGE
 
         ranges = []
-        if stale or self._month_holding(now) is None:
+        if stale or not self.covers(now):
             ranges.append((start, end))
-        if _utc(end) - _utc(now) <= REFRESH_AGE and (stale or self._month_holding(end) is None):
-            ranges.append(billing_month_range(end, self._billing_day))
+        ahead = now + REFRESH_AGE
+        if not self.covers(ahead):
+            ahead_range = billing_month_range(dt_util.as_local(ahead), self._billing_day)
+            if ahead_range not in ranges:
+                ranges.append(ahead_range)
 
         for range_start, range_end in ranges:
-            month = await self._async_fetch(range_start, range_end)
+            month = await self._async_fetch(range_start, range_end, now)
             if month is None:
                 continue
             self._months = [m for m in self._months if _utc(m.start) != _utc(month.start)]
@@ -127,13 +131,18 @@ class DemandWindowCache:
         self._months = kept
         return dropped
 
-    async def _async_fetch(self, start: datetime, end: datetime) -> _Month | None:
-        """Fetch [start, end); on a 404, retry once ending at the next 1 July. None on failure."""
+    async def _async_fetch(self, start: datetime, end: datetime, now: datetime) -> _Month | None:
+        """Fetch [start, end); on a 404, retry once ending at the next 1 July. None on failure.
+
+        The retry is skipped when that 1 July is not after `now`, since its range could not
+        cover anything still to come.
+        """
         try:
             body = await self._coordinator.async_fetch_demand_windows(start, end)
         except DemandWindowsUnavailable as err:
             retry_end = self._next_first_july(start)
-            if err.status != 404 or retry_end >= end:
+            retry_in_range = _utc(now) < _utc(retry_end) < _utc(end)
+            if err.status != 404 or not retry_in_range:
                 _LOGGER.debug("Demand windows %s to %s unavailable: %s", start, end, err)
                 return None
             end = retry_end

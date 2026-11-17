@@ -20,15 +20,17 @@ All DNSPs served by the Tariff Data Service (currently 12 across NSW, VIC, QLD, 
 
 ## Installation
 
-### HACS (recommended)
+### Home Assistant Marketplace (recommended)
 
 [![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Open-Energy-Collective&repository=ha-tariff-au&category=integration)
 
-1. In HACS, search for "OEC Tariff (AU)" and select **Download**
+1. Go to Settings → Marketplace, search for "OEC Tariff (AU)" and select **Install**
 2. Restart Home Assistant
-3. Go to Settings → Integrations → Add Integration → "OEC Tariff (AU)"
+3. Go to Settings → Devices & services → Add Integration → "OEC Tariff (AU)"
 4. Select your DNSP and tariff code
 5. Optionally configure demand tracking (select power sensor + billing day)
+
+Home Assistant 2026.3 to 2026.10: install through HACS, searching for "OEC Tariff (AU)".
 
 ### Manual
 
@@ -87,7 +89,7 @@ Each demand tracking sensor carries a `demand_recorded_at` attribute: the ISO ti
 
 ### Example Dashboard Card
 
-`dashboards/demand-card.yaml` is a ready-made Lovelace card showing the demand window, current peak and projected charge for one tariff. It needs the Mushroom and card-mod custom cards from HACS; the file header lists the entity IDs to substitute.
+`dashboards/demand-card.yaml` is a ready-made Lovelace card showing the demand window, current peak and projected charge for one tariff. It needs the Mushroom and card-mod custom cards from the Marketplace (HACS before 2026.11); the file header lists the entity IDs to substitute.
 
 ## Example Automations
 

@@ -273,3 +273,15 @@ async def test_refresh_refetches_at_exactly_24h(hass, hass_storage):
     await cache.async_refresh(NOW + timedelta(hours=24))
 
     assert coordinator.async_fetch_demand_windows.call_count == 2
+
+
+async def test_removing_the_entry_deletes_the_store(hass, hass_storage):
+    from custom_components.oec_tariff_au import async_remove_entry
+
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+    await cache.async_refresh(datetime(2027, 1, 10, 12, 0, tzinfo=MELBOURNE))
+    assert STORE_KEY in hass_storage
+
+    await async_remove_entry(hass, SimpleNamespace(entry_id=ENTRY_ID))
+
+    assert STORE_KEY not in hass_storage

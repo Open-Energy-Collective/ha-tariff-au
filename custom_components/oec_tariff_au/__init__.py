@@ -9,7 +9,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import CONF_BILLING_DAY, DEFAULT_BILLING_DAY, DOMAIN
 from .coordinator import OecTariffCoordinator
-from .window_cache import DemandWindowCache
+from .window_cache import DemandWindowCache, async_remove_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,3 +68,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the entry's cached demand windows when the entry is deleted."""
+    await async_remove_store(hass, entry.entry_id)

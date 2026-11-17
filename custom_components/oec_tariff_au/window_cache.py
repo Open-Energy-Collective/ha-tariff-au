@@ -37,13 +37,22 @@ def _utc(when: datetime) -> datetime:
     return dt_util.as_utc(when)
 
 
+def _store(hass: HomeAssistant, entry_id: str) -> Store:
+    return Store(hass, STORAGE_VERSION, f"{DOMAIN}.demand_windows.{entry_id}")
+
+
+async def async_remove_store(hass: HomeAssistant, entry_id: str) -> None:
+    """Delete a config entry's cached windows from storage."""
+    await _store(hass, entry_id).async_remove()
+
+
 class DemandWindowCache:
     """The per-charge demand windows of the current (and, near its end, next) billing month."""
 
     def __init__(self, hass: HomeAssistant, coordinator, entry_id: str, billing_day: int) -> None:
         self._coordinator = coordinator
         self._billing_day = billing_day
-        self._store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.demand_windows.{entry_id}")
+        self._store: Store = _store(hass, entry_id)
         self._months: list[_Month] = []
         self._listeners: list[Callable[[], None]] = []
         self._outage = False

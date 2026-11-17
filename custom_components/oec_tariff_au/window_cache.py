@@ -1,11 +1,12 @@
 """Billing-month demand window cache, kept in an HA Store per config entry."""
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -50,6 +51,7 @@ class DemandWindowCache:
     """The per-charge demand windows of the current (and, near its end, next) billing month."""
 
     def __init__(self, hass: HomeAssistant, coordinator, entry_id: str, billing_day: int) -> None:
+        self._hass = hass
         self._coordinator = coordinator
         self._billing_day = billing_day
         self._store: Store = _store(hass, entry_id)
@@ -57,6 +59,7 @@ class DemandWindowCache:
         self._listeners: list[Callable[[], None]] = []
         self._outage = False
         self._old_service_warned = False
+        self._refresh_lock = asyncio.Lock()
         self.fetched_at: datetime | None = None
 
     async def async_load(self) -> None:
@@ -79,9 +82,25 @@ class DemandWindowCache:
                 )
             )
 
+    @callback
+    def schedule_refresh(self, now: datetime) -> None:
+        """Start `async_refresh_logged(now)` as a task."""
+        self._hass.async_create_task(self.async_refresh_logged(now))
+
+    async def async_refresh_logged(self, now: datetime) -> None:
+        """Refresh, logging any failure; `_check_cover` warns while there is no cover."""
+        try:
+            await self.async_refresh(now)
+        except Exception:
+            _LOGGER.exception("Demand windows refresh failed")
+
     async def async_refresh(self, now: datetime) -> None:
         """Fetch the billing month holding `now` when stale or uncovered, and the one holding
-        `now + 24 h` when that instant is uncovered."""
+        `now + 24 h` when that instant is uncovered. One refresh runs at a time."""
+        async with self._refresh_lock:
+            await self._async_refresh(now)
+
+    async def _async_refresh(self, now: datetime) -> None:
         changed = self._prune(now)
         start, end = billing_month_range(dt_util.as_local(now), self._billing_day)
         stale = self.fetched_at is None or _utc(now) - _utc(self.fetched_at) >= REFRESH_AGE

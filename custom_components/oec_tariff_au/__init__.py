@@ -1,7 +1,5 @@
 """OEC Tariff integration for Home Assistant."""
 
-import logging
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
@@ -10,8 +8,6 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_BILLING_DAY, DEFAULT_BILLING_DAY, DOMAIN
 from .coordinator import OecTariffCoordinator
 from .window_cache import DemandWindowCache, async_remove_store
-
-_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR]
 
@@ -25,19 +21,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     cache = DemandWindowCache(hass, coordinator, entry.entry_id, billing_day)
     await cache.async_load()
 
-    async def _async_refresh_windows() -> None:
-        """Refresh the windows, logging any failure; the cache warns while it has no cover."""
-        try:
-            await cache.async_refresh(dt_util.utcnow())
-        except Exception:
-            _LOGGER.exception("Demand windows refresh failed")
-
-    await _async_refresh_windows()
+    await cache.async_refresh_logged(dt_util.utcnow())
 
     @callback
     def _refresh_windows() -> None:
         """Refresh the windows on every coordinator update; the cache skips it when fresh."""
-        hass.async_create_task(_async_refresh_windows())
+        cache.schedule_refresh(dt_util.utcnow())
 
     entry.async_on_unload(coordinator.async_add_listener(_refresh_windows))
 

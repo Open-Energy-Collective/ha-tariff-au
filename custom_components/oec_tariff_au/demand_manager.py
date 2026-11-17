@@ -107,7 +107,7 @@ class DemandManager:
             for key in [k for k in self.trackers if k not in listed]:
                 _LOGGER.info("Demand charge %s is no longer in the tariff; removed", key)
                 del self.trackers[key]
-        self.hass.async_create_task(self.cache.async_refresh(now))
+        self.cache.schedule_refresh(now)
 
     def _read_power_kw(self) -> float | None:
         """Return the power entity's reading in kW, None when it has no number."""

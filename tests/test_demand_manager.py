@@ -159,6 +159,17 @@ async def test_billing_reset_resets_all_and_refreshes_cache(hass):
     cache.async_refresh.assert_awaited_once_with(reset_at)
 
 
+async def test_billing_reset_logs_a_failed_refresh(hass, caplog):
+    adelaide = ZoneInfo("Australia/Adelaide")
+    manager, cache, _ = await _setup(hass, LBAD, datetime(2027, 1, 31, 18, 0, tzinfo=adelaide))
+    cache.async_refresh = AsyncMock(side_effect=RuntimeError("boom"))
+
+    manager._async_sample(datetime(2027, 2, 1, 0, 0, 30, tzinfo=adelaide))
+    await hass.async_block_till_done()
+
+    assert "Demand windows refresh failed" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("state", "attributes", "expected"),
     [

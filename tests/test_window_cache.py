@@ -1,5 +1,6 @@
 """Tests for the billing-month demand window cache."""
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -285,3 +286,27 @@ async def test_removing_the_entry_deletes_the_store(hass, hass_storage):
     await async_remove_entry(hass, SimpleNamespace(entry_id=ENTRY_ID))
 
     assert STORE_KEY not in hass_storage
+
+
+async def test_concurrent_refreshes_send_one_request(hass, hass_storage):
+    async def slow_body(start, end):
+        await asyncio.sleep(0)
+        return _body(start, end)
+
+    coordinator = _coordinator(slow_body)
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 1)
+    now = datetime(2027, 1, 10, 12, 0, tzinfo=MELBOURNE)
+
+    await asyncio.gather(cache.async_refresh(now), cache.async_refresh(now))
+
+    assert coordinator.async_fetch_demand_windows.await_count == 1
+
+
+async def test_scheduled_refresh_logs_a_failure(hass, hass_storage, caplog):
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+    cache.async_refresh = AsyncMock(side_effect=RuntimeError("boom"))
+
+    cache.schedule_refresh(datetime(2027, 1, 10, 12, 0, tzinfo=MELBOURNE))
+    await hass.async_block_till_done()
+
+    assert "Demand windows refresh failed" in caplog.text

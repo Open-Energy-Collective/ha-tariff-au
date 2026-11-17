@@ -9,7 +9,7 @@ Real-time Australian network tariff data in Home Assistant, powered by the [Tari
 - **Current period** sensor — peak, off_peak, shoulder, solar_soak
 - **Demand window** enum sensor — `active` or `inactive`, selectable as a dropdown in automation triggers
 - **Daily supply charge** sensor
-- **Demand rate** sensor with window/method attributes
+- **Demand rate** sensor listing every demand charge, with its windows and method, in a `charges` attribute
 - **Demand charge tracker** — monitors your grid power and calculates peak demand charges, with a `demand_recorded_at` attribute giving the time of the current chargeable peak
 - **Example dashboard card** — `dashboards/demand-card.yaml` shows demand-tracking status at a glance
 - **Config flow UI** — pick your DNSP, tariff, and optionally configure demand tracking
@@ -83,7 +83,17 @@ The tracker automatically uses the correct measurement methodology for your DNSP
 | `monthly_peak` | AusNet | Absolute max during demand window |
 | `rolling_12month_max` | Jemena | Max of last 12 monthly peaks |
 
-Samples every 30 seconds. Only records during the demand window (time, days, and season as defined by your DNSP). Persists across restarts.
+Samples every 30 seconds. Each demand charge on the tariff is measured on its own, only inside the windows the tariff service lists for it (time, days, season, time zone and public holidays). Persists across restarts. Needs tariff-service 0.10.0 or later; without demand windows covering now, nothing is measured and Demand Window is unavailable.
+
+| Entity | Meaning |
+|--------|---------|
+| Demand Rate | Highest rate among the charges in season now, `0.0` when none is. The `charges` attribute lists every charge. |
+| Demand Window | `active` when any charge's window covers now. `active_charges` lists which. |
+| Month Peak Demand | Highest chargeable peak across the charges. `charges` gives each charge's peak. |
+| Monthly Demand Charge | Sum over the charges of chargeable peak times rate. `charges` gives each amount. |
+| Demand Surcharge | Sum over the charges of rate divided by that charge's window hours in the billing month. |
+
+Charges that bill the highest of the last 12 months (`rolling_12_months`) use that peak. Charges in kVA are measured from your kW sensor as a stand-in, so they read low, and their `charges` entry carries `"measured_as": "kW"`.
 
 Each demand tracking sensor carries a `demand_recorded_at` attribute: the ISO timestamp at which the current chargeable peak was recorded, or unset if nothing has been recorded this billing month.
 

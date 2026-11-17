@@ -1,10 +1,12 @@
 """Tests for the coordinator's API handling."""
 
 import logging
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.oec_tariff_au.const import (
@@ -16,7 +18,11 @@ from custom_components.oec_tariff_au.const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
-from custom_components.oec_tariff_au.coordinator import OecTariffCoordinator
+from custom_components.oec_tariff_au.coordinator import (
+    BACKOFF_UNTIL,
+    DemandWindowsUnavailable,
+    OecTariffCoordinator,
+)
 
 DNSPS = [
     {"code": "energex", "timezone": "Australia/Brisbane"},
@@ -295,3 +301,56 @@ async def test_429_is_logged_once_per_backoff(hass, aioclient_mock, freezer, cap
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
     assert len(rate_limit_warnings(caplog)) == 2
+
+
+# Demand windows (#16)
+
+WINDOWS_URL = f"{DEFAULT_API_URL}/calculate/demand-windows"
+WINDOW_START = datetime(2026, 11, 1, tzinfo=timezone(timedelta(hours=10)))
+WINDOW_END = datetime(2026, 11, 8, tzinfo=timezone(timedelta(hours=10)))
+
+
+async def test_fetch_demand_windows_sends_offset_range(hass, aioclient_mock):
+    body = {"windows": []}
+    aioclient_mock.get(WINDOWS_URL, json=body)
+
+    result = await make_coordinator(hass).async_fetch_demand_windows(WINDOW_START, WINDOW_END)
+
+    assert result == body
+    params = aioclient_mock.mock_calls[0][1].query
+    assert params["dnsp"] == "ausnet"
+    assert params["tariff"] == "NASN12"
+    assert params["start"] == "2026-11-01T00:00:00+10:00"
+    assert params["end"] == "2026-11-08T00:00:00+10:00"
+
+
+async def test_fetch_demand_windows_404_raises_with_status(hass, aioclient_mock):
+    aioclient_mock.get(WINDOWS_URL, status=404)
+
+    with pytest.raises(DemandWindowsUnavailable) as err:
+        await make_coordinator(hass).async_fetch_demand_windows(WINDOW_START, WINDOW_END)
+
+    assert err.value.status == 404
+
+
+async def test_fetch_demand_windows_429_starts_shared_backoff(hass, aioclient_mock):
+    aioclient_mock.get(WINDOWS_URL, status=429, headers={"Retry-After": "30"})
+
+    with pytest.raises(DemandWindowsUnavailable):
+        await make_coordinator(hass).async_fetch_demand_windows(WINDOW_START, WINDOW_END)
+
+    assert DEFAULT_API_URL.rstrip("/") in hass.data[BACKOFF_UNTIL]
+
+
+async def test_fetch_demand_windows_honours_shared_backoff(hass, aioclient_mock):
+    aioclient_mock.get(WINDOWS_URL, json={})
+    coordinator = make_coordinator(hass)
+    hass.data.setdefault(BACKOFF_UNTIL, {})[DEFAULT_API_URL.rstrip("/")] = dt_util.utcnow() + timedelta(
+        seconds=60
+    )
+
+    with pytest.raises(DemandWindowsUnavailable) as err:
+        await coordinator.async_fetch_demand_windows(WINDOW_START, WINDOW_END)
+
+    assert err.value.status is None
+    assert calls_to(aioclient_mock, WINDOWS_URL) == []

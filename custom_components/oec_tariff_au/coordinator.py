@@ -46,6 +46,14 @@ def parse_retry_after(value: str | None, now: datetime) -> float | None:
     return max(0.0, (when - now).total_seconds())
 
 
+class DemandWindowsUnavailable(Exception):
+    """Demand windows could not be fetched. status is None for backoff and network errors."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 class OecTariffCoordinator(DataUpdateCoordinator):
     """Fetch tariff data from OEC API."""
 
@@ -120,6 +128,34 @@ class OecTariffCoordinator(DataUpdateCoordinator):
         if time_zone is None:
             raise UpdateFailed(f"No time zone for DNSP {self.dnsp}")
         self.dnsp_time_zone = time_zone
+
+    async def async_fetch_demand_windows(self, start: datetime, end: datetime) -> dict:
+        """Fetch the demand windows covering start to end (offset-aware datetimes)."""
+        if (remaining := self._backoff_remaining()) > 0:
+            raise DemandWindowsUnavailable(
+                f"Rate limited by tariff-service, next request in {math.ceil(remaining)} s"
+            )
+        url = f"{self.api_url}/calculate/demand-windows"
+        params = {
+            "dnsp": self.dnsp,
+            "tariff": self.tariff,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        }
+        try:
+            async with self._session.get(url, params=params, timeout=10) as resp:
+                if resp.status == 429:
+                    self._start_backoff(resp)
+                    raise DemandWindowsUnavailable("Rate limited by tariff-service", 429)
+                if resp.status != 200:
+                    raise DemandWindowsUnavailable(
+                        f"API returned {resp.status}: {await resp.text()}", resp.status
+                    )
+                return await resp.json()
+        except DemandWindowsUnavailable:
+            raise
+        except Exception as err:
+            raise DemandWindowsUnavailable(f"Error fetching demand windows: {err}") from err
 
     async def _async_update_data(self) -> dict:
         """Fetch current rate from OEC API."""

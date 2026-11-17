@@ -1,11 +1,17 @@
 """OEC Tariff integration for Home Assistant."""
 
+import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import CONF_BILLING_DAY, DEFAULT_BILLING_DAY, DOMAIN
 from .coordinator import OecTariffCoordinator
+from .window_cache import DemandWindowCache
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR]
 
@@ -15,9 +21,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = OecTariffCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
+    billing_day = entry.data.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY)
+    cache = DemandWindowCache(hass, coordinator, entry.entry_id, billing_day)
+    await cache.async_load()
+    try:
+        await cache.async_refresh(dt_util.utcnow())
+    except Exception:  # setup goes on; the cache warns while it has no cover
+        _LOGGER.exception("Demand windows refresh failed at setup")
+
+    @callback
+    def _refresh_windows() -> None:
+        """Refresh the windows on every coordinator update; the cache skips it when fresh."""
+        hass.async_create_task(cache.async_refresh(dt_util.utcnow()))
+
+    entry.async_on_unload(coordinator.async_add_listener(_refresh_windows))
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator,
-        "demand_tracker": None,
+        "window_cache": cache,
+        "demand_manager": None,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -33,9 +55,9 @@ async def async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     data = hass.data[DOMAIN].get(entry.entry_id, {})
-    tracker = data.get("demand_tracker")
-    if tracker:
-        tracker.stop()
+    manager = data.get("demand_manager")
+    if manager:
+        manager.stop()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:

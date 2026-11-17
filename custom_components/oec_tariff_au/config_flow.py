@@ -122,12 +122,11 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Check whether the selected tariff has a demand-charge component.
 
         The tariff *list* endpoint (used by async_step_tariff's own form)
-        deliberately only returns summary fields (code/name/tariff_type) --
-        `demand` is only present on the per-tariff detail endpoint. Fetch it
-        here so the demand-tracking step can be skipped entirely for
-        tariffs that have no demand component (e.g. flat/ToU-only tariffs),
-        instead of always asking for an optional power sensor that would
-        never actually do anything.
+        only returns summary fields (code/name/tariff_type); `demand_charges`
+        is only present on the per-tariff detail endpoint. Fetch it here so
+        the demand-tracking step is skipped for tariffs with no demand charge
+        (e.g. flat/ToU-only tariffs), instead of always asking for an
+        optional power sensor that would never do anything.
         """
         session = async_get_clientsession(self.hass)
         try:
@@ -137,7 +136,7 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ) as resp:
                 if resp.status == 200:
                     detail = await resp.json()
-                    return bool(detail.get("demand"))
+                    return bool(detail.get("demand_charges"))
         except (aiohttp.ClientError, TimeoutError):
             pass
         # If the check itself fails (network hiccup, etc.), fail open --

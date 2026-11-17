@@ -7,6 +7,8 @@ builds a `/calculate/demand-windows` body by hand from tariff-service #80's sche
 
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 NASN12 = {'tariff': 'NASN12',
@@ -225,3 +227,37 @@ def windows_body(
         "windows": [],
         "charges": entries,
     }
+
+
+def in_season(charge: dict, day: date) -> Span:
+    """Each charge's own span on the days of its months, none outside them."""
+    months = charge["months"]
+    if months is not None and day.month not in months:
+        return None
+    return charge["start"], charge["end"]
+
+
+def windows_coordinator(
+    tariff: dict, charges: list[dict] | None = None, spans: SpanFn = in_season
+) -> SimpleNamespace:
+    """A fake coordinator whose demand-windows bodies hold `charges` (default the tariff's).
+
+    Each body covers the requested range, one window per charge per day from `spans`.
+    """
+    zone = tariff_zone(tariff)
+
+    def fetch(start: datetime, end: datetime) -> dict:
+        days = [start.date() + timedelta(days=n) for n in range((end.date() - start.date()).days)]
+        return windows_body(
+            charges if charges is not None else tariff["demand_charges"],
+            days,
+            spans,
+            tz=zone,
+            start=start,
+            end=end,
+        )
+
+    return SimpleNamespace(
+        async_fetch_demand_windows=AsyncMock(side_effect=fetch),
+        dnsp_time_zone=ZoneInfo(tariff["timezone"]),
+    )

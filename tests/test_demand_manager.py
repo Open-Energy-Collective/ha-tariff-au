@@ -1,7 +1,7 @@
 """Tests for the demand manager: one ChargeTracker per charge, fed from the window cache."""
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
@@ -14,7 +14,9 @@ from custom_components.oec_tariff_au.demand_manager import DemandManager
 from custom_components.oec_tariff_au.demand_windows import charge_key
 from custom_components.oec_tariff_au.window_cache import DemandWindowCache
 
-from .fixtures import EA302, EVO_023, LBAD, N72, tariff_zone, windows_body
+from .fixtures import EA302, EVO_023, LBAD, N72, windows_body
+from .fixtures import in_season as _in_season
+from .fixtures import windows_coordinator as _coordinator
 
 POWER = "sensor.grid_power"
 ENTRY_ID = "entry1"
@@ -46,35 +48,6 @@ N19_CHARGES = [
         "peak_period": "month",
     },
 ]
-
-
-def _in_season(charge: dict, day: date):
-    """Each charge's own span on the days of its months, none outside them."""
-    months = charge["months"]
-    if months is not None and day.month not in months:
-        return None
-    return charge["start"], charge["end"]
-
-
-def _coordinator(tariff: dict, charges: list[dict] | None = None):
-    """A fake coordinator whose bodies hold `charges` (default the tariff's own)."""
-    zone = tariff_zone(tariff)
-
-    def fetch(start: datetime, end: datetime) -> dict:
-        days = [start.date() + timedelta(days=n) for n in range((end.date() - start.date()).days)]
-        return windows_body(
-            charges if charges is not None else tariff["demand_charges"],
-            days,
-            _in_season,
-            tz=zone,
-            start=start,
-            end=end,
-        )
-
-    return SimpleNamespace(
-        async_fetch_demand_windows=AsyncMock(side_effect=fetch),
-        dnsp_time_zone=ZoneInfo(tariff["timezone"]),
-    )
 
 
 async def _setup(hass, tariff: dict, now: datetime, charges: list[dict] | None = None):

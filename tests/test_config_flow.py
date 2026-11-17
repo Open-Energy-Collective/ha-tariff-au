@@ -22,6 +22,8 @@ no flow manager) and `async_step_tariff`'s routing decision (mocked
 downstream methods) gives full coverage without ever touching that path.
 """
 
+import re
+from pathlib import Path
 from unittest.mock import patch
 
 from custom_components.oec_tariff_au.config_flow import OecTariffConfigFlow
@@ -38,14 +40,29 @@ def _make_flow(hass, dnsp="energex", tariff="3900"):
 # --- _tariff_has_demand_component: real HTTP mocking, no flow manager ------
 
 
-async def test_has_demand_component_true_when_detail_includes_demand(hass, aioclient_mock):
+async def test_has_demand_component_true_when_detail_lists_demand_charges(hass, aioclient_mock):
     aioclient_mock.get(
         "https://api.openenergy.org.au/api/v1/tariffs/energex/3900",
-        json={"code": "3900", "demand": {"window_start": "16:00", "window_end": "21:00"}},
+        json={"code": "3900", "demand_charges": [{"period": "peak", "rate": 7.434}]},
     )
     flow = _make_flow(hass)
 
     assert await flow._tariff_has_demand_component() is True
+
+
+async def test_config_flow_demand_step_uses_demand_charges(hass, aioclient_mock):
+    """An empty `demand_charges` skips the demand step, whatever the legacy `demand` holds."""
+    aioclient_mock.get(
+        "https://api.openenergy.org.au/api/v1/tariffs/energex/3900",
+        json={
+            "code": "3900",
+            "demand_charges": [],
+            "demand": {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"},
+        },
+    )
+    flow = _make_flow(hass)
+
+    assert await flow._tariff_has_demand_component() is False
 
 
 async def test_has_demand_component_false_when_detail_omits_demand(hass, aioclient_mock):
@@ -107,3 +124,19 @@ async def test_tariff_step_shows_demand_form_when_demand_component_present(hass)
     assert result == "DEMAND_FORM"
     demand_step.assert_called_once_with()
     finish.assert_not_called()
+
+
+# --- No code reads the tariff detail's legacy `demand` object -----------------
+
+COMPONENT_DIR = Path(__file__).resolve().parent.parent / "custom_components"
+LEGACY_DEMAND = re.compile(r'\["demand"\]|get\("demand"\)')
+
+
+def test_no_code_reads_legacy_demand():
+    hits = [
+        f"{path.relative_to(COMPONENT_DIR)}:{number}"
+        for path in COMPONENT_DIR.rglob("*.py")
+        for number, line in enumerate(path.read_text().splitlines(), start=1)
+        if LEGACY_DEMAND.search(line)
+    ]
+    assert hits == []

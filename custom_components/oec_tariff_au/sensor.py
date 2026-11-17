@@ -1,5 +1,8 @@
 """Sensor entities for OEC Tariff."""
 
+from collections.abc import Callable
+from datetime import datetime
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -8,11 +11,29 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import OecTariffCoordinator
-from .demand_tracker import DemandWindowScheduler
+from .demand_sensors import async_setup_demand_sensors
+from .demand_windows import in_windows, next_transition
+from .window_cache import DemandWindowCache
+
+# The tariff detail's `demand_charges` fields listed in Demand Rate's `charges` attribute.
+CHARGE_FIELDS = (
+    "period",
+    "rate",
+    "unit",
+    "months",
+    "start",
+    "end",
+    "days",
+    "public_holidays",
+    "measurement_method",
+    "peak_period",
+)
 
 
 async def async_setup_entry(
@@ -21,6 +42,7 @@ async def async_setup_entry(
     """Set up OEC Tariff sensors from a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: OecTariffCoordinator = data["coordinator"]
+    cache: DemandWindowCache = data["window_cache"]
 
     entities = [
         OecCurrentRateSensor(coordinator, entry),
@@ -28,17 +50,17 @@ async def async_setup_entry(
         OecDailySupplyChargeSensor(coordinator, entry),
         OecTariffNameSensor(coordinator, entry),
     ]
-    if coordinator.tariff_detail and coordinator.tariff_detail.get("demand"):
+    if coordinator.tariff_detail and coordinator.tariff_detail.get("demand_charges"):
         entities.append(OecDemandRateSensor(coordinator, entry))
-        entities.append(OecDemandWindowStatusSensor(coordinator, entry))
+        entities.append(OecDemandWindowStatusSensor(coordinator, entry, cache))
     async_add_entities(entities)
 
-    # Set up demand tracking sensors if power entity configured
-    from .demand_sensors import async_setup_demand_sensors
-
-    tracker = await async_setup_demand_sensors(hass, entry, coordinator, async_add_entities)
-    if tracker:
-        data["demand_tracker"] = tracker
+    # Demand tracking sensors, when a power entity is configured
+    manager = await async_setup_demand_sensors(
+        hass, entry, coordinator, cache, async_add_entities
+    )
+    if manager:
+        data["demand_manager"] = manager
 
 
 class OecBaseSensor(CoordinatorEntity, SensorEntity):
@@ -140,27 +162,24 @@ class OecDemandRateSensor(OecBaseSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return demand rate."""
-        if self.coordinator.data and self.coordinator.data.get("detail"):
-            demand = self.coordinator.data["detail"].get("demand")
-            if demand:
-                return demand.get("rate")
-        return None
+        """Return the highest rate among the charges in season now, 0.0 when none is."""
+        if not self.coordinator.data or not self.coordinator.data.get("rate"):
+            return None
+        in_season = self.coordinator.data["rate"].get("demand_charges") or []
+        return max((charge["rate"] for charge in in_season), default=0.0)
 
     @property
     def extra_state_attributes(self) -> dict:
-        """Return demand window details."""
-        if self.coordinator.data and self.coordinator.data.get("detail"):
-            demand = self.coordinator.data["detail"].get("demand")
-            if demand:
-                return {
-                    "window_start": demand.get("window_start"),
-                    "window_end": demand.get("window_end"),
-                    "measurement_method": demand.get("measurement_method"),
-                    "days": demand.get("days"),
-                    "season_months": demand.get("season_months"),
-                }
-        return {}
+        """Return every demand charge of the tariff detail."""
+        detail = self.coordinator.data.get("detail") if self.coordinator.data else None
+        if not detail:
+            return {}
+        return {
+            "charges": [
+                {field: charge.get(field) for field in CHARGE_FIELDS}
+                for charge in detail.get("demand_charges") or []
+            ]
+        }
 
 
 class OecDemandWindowStatusSensor(OecBaseSensor):
@@ -170,50 +189,99 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
     state trigger/condition UI, so "active"/"inactive" can be picked
     directly without a custom value.
 
-    The stored/matched value is lowercase ("active"/"inactive" — the HA
+    The stored/matched value is lowercase ("active"/"inactive", the HA
     enum-sensor convention for machine values); `translation_key` maps that
     to "Active"/"Inactive" for display, via the `entity.sensor` block in
     strings.json.
+
+    The state follows the cached windows of every charge. It is unknown while the
+    cache does not cover now.
     """
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["active", "inactive"]
     _attr_translation_key = "demand_window"
 
-    def __init__(self, coordinator: OecTariffCoordinator, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        coordinator: OecTariffCoordinator,
+        entry: ConfigEntry,
+        cache: DemandWindowCache,
+    ) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, "demand_window")
         self._attr_name = "Demand Window"
         self._attr_icon = "mdi:flash-alert"
-        self._scheduler: DemandWindowScheduler | None = None
+        self._cache = cache
+        self._unsub_transition: Callable[[], None] | None = None
+
+    def _active_charges(self, now: datetime) -> list[str]:
+        """Return the period of each cached charge with a window holding `now`."""
+        return [
+            cached.charge["period"]
+            for cached in self._cache.charges(now).values()
+            if in_windows(cached.windows, now)
+        ]
+
+    def _cancel_transition(self) -> None:
+        if self._unsub_transition:
+            self._unsub_transition()
+            self._unsub_transition = None
 
     @callback
-    def _handle_transition(self, is_active: bool) -> None:
-        """Write updated state when the window transitions."""
+    def _schedule_transition(self) -> None:
+        """Schedule a state write at the next bound of any charge's cached windows."""
+        self._cancel_transition()
+        now = dt_util.now()
+        windows = [w for cached in self._cache.charges(now).values() for w in cached.windows]
+        when = next_transition(windows, now)
+        if when is not None:
+            self._unsub_transition = async_track_point_in_time(
+                self.hass, self._handle_transition, when
+            )
+
+    @callback
+    def _handle_transition(self, _now: datetime) -> None:
+        """Write the new state at a window bound and schedule the next one."""
+        self._unsub_transition = None
+        self._schedule_transition()
         self.async_write_ha_state()
 
+    @callback
+    def _handle_cache_change(self) -> None:
+        """Reschedule from the new windows and write the state."""
+        self._schedule_transition()
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Schedule a transition when none is pending, as after a billing month change."""
+        if self._unsub_transition is None:
+            self._schedule_transition()
+        super()._handle_coordinator_update()
+
     async def async_added_to_hass(self) -> None:
-        """Start tracking the window boundary once added."""
+        """Start tracking the window bounds once added."""
         await super().async_added_to_hass()
-        self._scheduler = DemandWindowScheduler(
-            self.hass, self._handle_transition, self.coordinator.dnsp_time_zone
-        )
-        detail = self.coordinator.tariff_detail
-        demand = detail.get("demand") if detail else None
-        if demand:
-            self._scheduler.start(demand)
+        self.async_on_remove(self._cache.add_listener(self._handle_cache_change))
+        self._schedule_transition()
 
     async def async_will_remove_from_hass(self) -> None:
         """Cancel any pending scheduled transition."""
-        if self._scheduler:
-            self._scheduler.stop()
+        self._cancel_transition()
 
     @property
     def native_value(self) -> str | None:
-        """Return "active" or "inactive"."""
-        if self._scheduler is None or self._scheduler.is_active is None:
+        """Return "active" or "inactive", None when no cached windows cover now."""
+        now = dt_util.now()
+        if not self._cache.covers(now):
             return None
-        return "active" if self._scheduler.is_active else "inactive"
+        return "active" if self._active_charges(now) else "inactive"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the periods active now."""
+        return {"active_charges": self._active_charges(dt_util.now())}
 
 
 class OecTariffNameSensor(OecBaseSensor):

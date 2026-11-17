@@ -1,31 +1,37 @@
-"""Tests for demand charge sensors — in particular the surcharge-per-kWh
-amortization formula.
-"""
+"""Tests for the demand sensors over a DemandManager: values, attributes and lifecycle."""
 
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import State
 from pytest_homeassistant_custom_component.common import mock_restore_cache_with_extra_data
 
+from custom_components.oec_tariff_au.demand_manager import DemandManager
 from custom_components.oec_tariff_au.demand_sensors import (
     OecDemandSurchargePerKwhSensor,
     OecMonthlyDemandChargeSensor,
     OecMonthPeakDemandSensor,
     async_setup_demand_sensors,
 )
-from custom_components.oec_tariff_au.demand_tracker import DemandTracker
+from custom_components.oec_tariff_au.demand_windows import charge_key
+from custom_components.oec_tariff_au.window_cache import DemandWindowCache
+
+from .fixtures import EVO_023, LBAD, N72, NASN12, windows_coordinator
+
+POWER = "sensor.power"
+ENTRY_ID = "test_entry"
+MELBOURNE = ZoneInfo("Australia/Melbourne")
 
 
 class FakeCoordinator:
-    """Minimal stand-in for OecTariffCoordinator — only what the sensor reads."""
+    """Minimal stand-in for OecTariffCoordinator: only what the sensors read."""
 
-    def __init__(self, demand):
+    def __init__(self, demand_charges):
         self.dnsp = "test_dnsp"
         self.tariff = "test_tariff"
-        self.tariff_detail = {"demand": demand}
-        self.data = {"detail": {"demand": demand}}
-        self.dnsp_time_zone = ZoneInfo("Australia/Melbourne")
+        self.tariff_detail = {"demand_charges": demand_charges}
+        self.data = {"detail": self.tariff_detail, "rate": {}}
+        self.dnsp_time_zone = MELBOURNE
 
     def async_add_listener(self, update_callback, context=None):
         """CoordinatorEntity.async_added_to_hass() needs this to register."""
@@ -33,110 +39,10 @@ class FakeCoordinator:
 
 
 class FakeEntry:
-    entry_id = "test_entry"
+    entry_id = ENTRY_ID
 
     def __init__(self, data=None):
         self.data = data or {}
-
-
-def make_tracker(window_start, window_end, month_peak_kw, measurement_method="30min_max", days="all"):
-    tracker = DemandTracker(
-        hass=None,
-        power_entity_id="sensor.power",
-        measurement_method=measurement_method,
-        window_start=window_start,
-        window_end=window_end,
-        days=days,
-        season_months=None,
-        billing_day=1,
-    )
-    tracker.month_peak_kw = month_peak_kw
-    return tracker
-
-
-def test_surcharge_per_kwh_matches_tariff_service_formula():
-    """$7.434/kW over a 5-hour daily window is 7.434 / 150 = 0.04956 $/kWh, the
-    value tariff-service's test_demand_surcharge pins (tariff-service#33)."""
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
-    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
-
-    assert sensor.native_value == 0.04956
-
-
-def test_surcharge_per_kwh_does_not_scale_with_peak_demand():
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=10.0)
-    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
-
-    assert sensor.native_value == 0.04956
-
-
-def test_surcharge_per_kwh_weekday_window_counts_weekdays_only():
-    """AusNet NASN12: 6 hours x 30 x 5/7 = 128.57 hours, as tariff-service returns."""
-    demand = {"rate": 11.473, "window_start": "15:00", "window_end": "21:00"}
-    tracker = make_tracker("15:00", "21:00", month_peak_kw=5.0, days="weekdays")
-    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
-
-    assert sensor.native_value == 0.08923
-
-
-def test_surcharge_per_kwh_weekend_window_counts_weekends_only():
-    demand = {"rate": 6.0, "window_start": "15:00", "window_end": "21:00"}
-    tracker = make_tracker("15:00", "21:00", month_peak_kw=5.0, days="weekends")
-    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
-
-    # 6.0 / (6 * 30 * 2 / 7) = 0.11667
-    assert sensor.native_value == 0.11667
-
-
-def test_surcharge_per_kwh_all_day_window_no_division_by_zero():
-    """An all-day (00:00-00:00) demand window must treat the window as 24 hours."""
-    demand = {"rate": 11.473, "window_start": "00:00", "window_end": "00:00"}
-    tracker = make_tracker("00:00", "00:00", month_peak_kw=5.0, measurement_method="monthly_peak")
-    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
-
-    # 11.473 / (24 * 30) = 0.01593
-    assert sensor.native_value == 0.01593
-
-
-def test_surcharge_per_kwh_zero_peak_demand_returns_zero():
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=0.0)
-    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
-
-    assert sensor.native_value == 0.0
-
-
-# --- OecMonthlyDemandChargeSensor: None branches ----------------------------
-
-
-def test_monthly_demand_charge_returns_none_without_coordinator_data():
-    coordinator = FakeCoordinator(demand=None)
-    coordinator.data = None
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
-    sensor = OecMonthlyDemandChargeSensor(coordinator, FakeEntry(), tracker)
-
-    assert sensor.native_value is None
-
-
-def test_monthly_demand_charge_returns_none_without_demand_detail():
-    coordinator = FakeCoordinator(demand=None)
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
-    sensor = OecMonthlyDemandChargeSensor(coordinator, FakeEntry(), tracker)
-
-    assert sensor.native_value is None
-
-
-def test_monthly_demand_charge_computes_from_tracker_and_rate():
-    coordinator = FakeCoordinator(demand={"rate": 7.434})
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
-    sensor = OecMonthlyDemandChargeSensor(coordinator, FakeEntry(), tracker)
-
-    assert sensor.native_value == round(4.5 * 7.434, 2)
-
-
-# --- async_setup_demand_sensors: wiring / skip conditions -------------------
 
 
 class FakeAddEntities:
@@ -147,209 +53,296 @@ class FakeAddEntities:
         self.added.extend(entities)
 
 
-async def test_async_setup_demand_sensors_skips_without_power_entity(hass):
-    coordinator = FakeCoordinator(demand={"rate": 1.0, "window_start": "16:00", "window_end": "21:00"})
-    entry = FakeEntry(data={})
-    add_entities = FakeAddEntities()
-
-    tracker = await async_setup_demand_sensors(hass, entry, coordinator, add_entities)
-
-    assert tracker is None
-    assert add_entities.added == []
-
-
-async def test_async_setup_demand_sensors_skips_without_demand_in_tariff_detail(hass):
-    coordinator = FakeCoordinator(demand=None)
-    coordinator.tariff_detail = {}  # no "demand" key at all
-    entry = FakeEntry(data={"power_entity": "sensor.power"})
-    add_entities = FakeAddEntities()
-
-    tracker = await async_setup_demand_sensors(hass, entry, coordinator, add_entities)
-
-    assert tracker is None
-    assert add_entities.added == []
+async def _manager(hass, tariff, now=None, coordinator=None, charges=None):
+    """A manager on `tariff`; its cache is refreshed at `now` when one is given."""
+    await hass.config.async_set_time_zone(tariff["timezone"])
+    cache = DemandWindowCache(
+        hass, coordinator or windows_coordinator(tariff), ENTRY_ID, 1
+    )
+    if now is not None:
+        await cache.async_refresh(now)
+    return DemandManager(hass, POWER, cache, charges or tariff["demand_charges"], 1)
 
 
-async def test_async_setup_demand_sensors_happy_path_builds_tracker_and_three_entities(hass):
-    demand = {
-        "rate": 7.434,
-        "window_start": "16:00",
-        "window_end": "21:00",
-        "days": "all",
-        "measurement_method": "30min_max",
-        "season_months": None,
-    }
-    coordinator = FakeCoordinator(demand=demand)
-    entry = FakeEntry(data={"power_entity": "sensor.power", "billing_day": 5})
-    add_entities = FakeAddEntities()
-
-    tracker = await async_setup_demand_sensors(hass, entry, coordinator, add_entities)
-
-    assert isinstance(tracker, DemandTracker)
-    assert tracker.power_entity_id == "sensor.power"
-    assert tracker.billing_day == 5
-    assert tracker.measurement_method == "30min_max"
-    assert len(add_entities.added) == 3
-    assert isinstance(add_entities.added[0], OecMonthPeakDemandSensor)
+def _set_peak(manager, charge, kw, recorded_at=None):
+    tracker = manager.trackers[charge_key(charge)]
+    tracker.month_peak_kw = kw
+    tracker.month_peak_recorded_at = recorded_at
+    return tracker
 
 
-async def test_async_setup_demand_sensors_defaults_billing_day_when_unset(hass):
-    demand = {
-        "rate": 7.434,
-        "window_start": "16:00",
-        "window_end": "21:00",
-        "days": "all",
-        "measurement_method": "30min_max",
-        "season_months": None,
-    }
-    coordinator = FakeCoordinator(demand=demand)
-    entry = FakeEntry(data={"power_entity": "sensor.power"})  # no billing_day set
-    add_entities = FakeAddEntities()
-
-    tracker = await async_setup_demand_sensors(hass, entry, coordinator, add_entities)
-
-    assert tracker.billing_day == 1  # DEFAULT_BILLING_DAY
+# --- Monthly Demand Charge --------------------------------------------------
 
 
-# --- OecMonthPeakDemandSensor: restore-on-startup lifecycle -----------------
+async def test_monthly_charge_sums_charges(hass):
+    summer = N72["demand_charges"][0]  # rate 5.454
+    off_peak = {**EVO_023["demand_charges"][2], "rate": 1.0}
+    manager = await _manager(hass, N72, charges=[summer, off_peak])
+    _set_peak(manager, summer, 4.0)
+    _set_peak(manager, off_peak, 2.0)
+    sensor = OecMonthlyDemandChargeSensor(FakeCoordinator([summer, off_peak]), FakeEntry(), manager)
+
+    assert sensor.native_value == 23.82
+    assert sensor.extra_state_attributes["charges"] == [
+        {"period": "peak", "months": [1, 2, 3, 11, 12], "amount": 21.82},
+        {"period": "off_peak", "months": None, "amount": 2.0},
+    ]
 
 
-async def test_month_peak_sensor_starts_tracker_fresh_with_no_prior_state(hass):
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    coordinator = FakeCoordinator(demand=demand)
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=0.0)
-    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
-    tracker.hass = hass
+async def test_monthly_charge_is_zero_with_no_peak(hass):
+    manager = await _manager(hass, N72)
+    coordinator = FakeCoordinator(N72["demand_charges"])
+    sensor = OecMonthlyDemandChargeSensor(coordinator, FakeEntry(), manager)
+
+    assert sensor.native_value == 0.0
+
+
+# --- Demand Surcharge -------------------------------------------------------
+
+SURCHARGE_CHARGE = {
+    "period": "peak",
+    "rate": 10.0,
+    "unit": "kW",
+    "start": "16:00",
+    "end": "20:00",
+    "days": "all",
+    "months": None,
+    "measurement_method": "30min_max",
+    "peak_period": "month",
+}
+SURCHARGE_TARIFF = {**NASN12, "demand_charges": [SURCHARGE_CHARGE]}
+
+
+def _first_twenty_days(charge: dict, day: date):
+    """Four hours on each of the month's first 20 days: 80 window hours."""
+    return (charge["start"], charge["end"]) if day.day <= 20 else None
+
+
+async def test_surcharge_uses_exact_window_hours(hass, freezer):
+    now = datetime(2027, 1, 10, 12, 0, tzinfo=MELBOURNE)
+    coordinator = windows_coordinator(SURCHARGE_TARIFF, spans=_first_twenty_days)
+    manager = await _manager(hass, SURCHARGE_TARIFF, now, coordinator)
+    _set_peak(manager, SURCHARGE_CHARGE, 3.0)
+    sensor = OecDemandSurchargePerKwhSensor(
+        FakeCoordinator([SURCHARGE_CHARGE]), FakeEntry(), manager
+    )
+
+    freezer.move_to(now)
+    assert sensor.native_value == 0.125
+
+
+async def test_surcharge_skips_charges_without_peak(hass, freezer):
+    now = datetime(2027, 1, 10, 12, 0, tzinfo=MELBOURNE)
+    manager = await _manager(hass, NASN12, now)
+    sensor = OecDemandSurchargePerKwhSensor(
+        FakeCoordinator(NASN12["demand_charges"]), FakeEntry(), manager
+    )
+
+    freezer.move_to(now)
+    assert sensor.native_value == 0.0
+
+
+async def test_surcharge_is_zero_without_cover(hass):
+    manager = await _manager(hass, NASN12)
+    _set_peak(manager, NASN12["demand_charges"][0], 3.0)
+    sensor = OecDemandSurchargePerKwhSensor(
+        FakeCoordinator(NASN12["demand_charges"]), FakeEntry(), manager
+    )
+
+    assert sensor.native_value == 0.0
+
+
+# --- Month Peak Demand ------------------------------------------------------
+
+
+async def test_month_peak_is_highest_chargeable_peak(hass):
+    manager = await _manager(hass, N72)
+    summer, winter = N72["demand_charges"]
+    _set_peak(manager, summer, 3.25, datetime(2027, 1, 12, 17, 0, tzinfo=MELBOURNE))
+    _set_peak(manager, winter, 1.5)
+    sensor = OecMonthPeakDemandSensor(FakeCoordinator(N72["demand_charges"]), FakeEntry(), manager)
+
+    assert sensor.native_value == 3.25
+    attributes = sensor.extra_state_attributes
+    assert attributes["demand_recorded_at"] == "2027-01-12T17:00:00+11:00"
+    assert attributes["charges"] == [
+        {
+            "period": "peak",
+            "months": [1, 2, 3, 11, 12],
+            "unit": "kW",
+            "peak": 3.25,
+            "demand_recorded_at": "2027-01-12T17:00:00+11:00",
+        },
+        {
+            "period": "peak",
+            "months": [4, 5, 6, 7, 8, 9, 10],
+            "unit": "kW",
+            "peak": 1.5,
+            "demand_recorded_at": None,
+        },
+    ]
+    assert attributes["billing_day"] == 1
+    assert attributes["power_entity"] == POWER
+    assert attributes["last_reset"] is None
+    for dropped in ("demand_window", "demand_days", "season_months"):
+        assert dropped not in attributes
+
+
+async def test_kva_charge_marked_measured_as_kw(hass):
+    manager = await _manager(hass, LBAD)
+    sensor = OecMonthPeakDemandSensor(FakeCoordinator(LBAD["demand_charges"]), FakeEntry(), manager)
+
+    charges = sensor.extra_state_attributes["charges"]
+    assert [c["unit"] for c in charges] == ["kVA", "kVA"]
+    assert all(c["measured_as"] == "kW" for c in charges)
+
+
+async def test_kw_charge_has_no_measured_as(hass):
+    manager = await _manager(hass, N72)
+    sensor = OecMonthPeakDemandSensor(FakeCoordinator(N72["demand_charges"]), FakeEntry(), manager)
+
+    assert all("measured_as" not in c for c in sensor.extra_state_attributes["charges"])
+
+
+async def _added_month_peak(hass, manager):
+    sensor = OecMonthPeakDemandSensor(
+        FakeCoordinator(N72["demand_charges"]), FakeEntry(), manager
+    )
     sensor.hass = hass
     sensor.entity_id = "sensor.month_peak_demand"
-
     await sensor.async_added_to_hass()
+    return sensor
 
+
+async def test_month_peak_sensor_starts_manager_with_no_prior_state(hass):
+    manager = await _manager(hass, N72)
+    sensor = await _added_month_peak(hass, manager)
     try:
-        assert tracker.month_peak_kw == 0.0  # nothing restored, still default
-        assert tracker._unsub_timer is not None  # tracker.start() was called
+        assert sensor.native_value == 0.0
+        assert manager._unsub_timer is not None
     finally:
         await sensor.async_will_remove_from_hass()
 
 
-async def test_month_peak_sensor_restores_saved_tracker_state_on_startup(hass):
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    coordinator = FakeCoordinator(demand=demand)
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=0.0)
-    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
-    tracker.hass = hass
-    sensor.hass = hass
-    sensor.entity_id = "sensor.month_peak_demand"
-
+async def test_month_peak_sensor_restores_a_1_2_blob_onto_the_first_charge(hass):
     saved_data = {
         "month_peak_kw": 6.75,
         "previous_month_peak_kw": 5.5,
         "monthly_peaks_12": [5.5, 6.0],
-        "last_reset": "2026-07-01T00:00:00+10:00",
+        "last_reset": "2027-01-01T00:00:00+11:00",
     }
     mock_restore_cache_with_extra_data(
         hass, [(State("sensor.month_peak_demand", "6.75"), saved_data)]
     )
-
-    await sensor.async_added_to_hass()
-
+    manager = await _manager(hass, N72)
+    sensor = await _added_month_peak(hass, manager)
     try:
-        assert tracker.month_peak_kw == 6.75
-        assert tracker.previous_month_peak_kw == 5.5
-        # Legacy saved blob (pre-demand_recorded_at): plain floats, no
-        # per-entry timestamp -- restore_state() should migrate this to the
-        # (value, None) tuple shape rather than fail.
-        assert tracker.monthly_peaks_12 == [(5.5, None), (6.0, None)]
+        first, second = (manager.trackers[charge_key(c)] for c in N72["demand_charges"])
+        assert first.month_peak_kw == 6.75
+        assert first.monthly_peaks_12 == [(5.5, None), (6.0, None)]
+        assert second.month_peak_kw == 0.0
+        assert manager.last_reset == datetime.fromisoformat("2027-01-01T00:00:00+11:00")
     finally:
         await sensor.async_will_remove_from_hass()
 
 
-async def test_month_peak_sensor_stops_tracker_on_removal(hass):
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    coordinator = FakeCoordinator(demand=demand)
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=0.0)
-    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
-    tracker.hass = hass
-    sensor.hass = hass
-    sensor.entity_id = "sensor.month_peak_demand"
+async def test_month_peak_sensor_restores_before_starting(hass):
+    order = []
+    manager = await _manager(hass, N72)
+    manager.restore_state = lambda data: order.append("restore")
+    manager.start = lambda: order.append("start")
+    manager.stop = lambda: None
+    mock_restore_cache_with_extra_data(
+        hass, [(State("sensor.month_peak_demand", "1.0"), {"month_peak_kw": 1.0})]
+    )
 
-    await sensor.async_added_to_hass()
-    assert tracker._unsub_timer is not None
+    sensor = await _added_month_peak(hass, manager)
+    await sensor.async_will_remove_from_hass()
+
+    assert order == ["restore", "start"]
+
+
+async def test_month_peak_sensor_stops_manager_on_removal(hass):
+    manager = await _manager(hass, N72)
+    sensor = await _added_month_peak(hass, manager)
+    assert manager._unsub_timer is not None
 
     await sensor.async_will_remove_from_hass()
-    assert tracker._unsub_timer is None
+    assert manager._unsub_timer is None
 
 
-def test_month_peak_sensor_native_value_reflects_chargeable_demand():
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    coordinator = FakeCoordinator(demand=demand)
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=3.25)
-    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
+async def test_month_peak_extra_restore_state_data_is_manager_state(hass):
+    manager = await _manager(hass, N72)
+    _set_peak(manager, N72["demand_charges"][0], 2.0)
+    sensor = OecMonthPeakDemandSensor(FakeCoordinator(N72["demand_charges"]), FakeEntry(), manager)
 
-    assert sensor.native_value == 3.25
-
-
-def test_month_peak_sensor_extra_restore_state_data_round_trips_tracker_save_state():
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    coordinator = FakeCoordinator(demand=demand)
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=2.0)
-    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
-
-    assert sensor.extra_restore_state_data.as_dict() == tracker.save_state()
+    assert sensor.extra_restore_state_data.as_dict() == manager.save_state()
 
 
-# --- demand_recorded_at exposed via extra_state_attributes ------------------
+# --- async_setup_demand_sensors ---------------------------------------------
 
 
-def test_month_peak_sensor_exposes_demand_recorded_at():
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    coordinator = FakeCoordinator(demand=demand)
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
-    tracker.month_peak_recorded_at = datetime(2026, 7, 22, 17, 0)
-    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
-
-    assert sensor.extra_state_attributes["demand_recorded_at"] == "2026-07-22T17:00:00"
+def _cache(hass):
+    return DemandWindowCache(hass, windows_coordinator(N72), ENTRY_ID, 1)
 
 
-def test_month_peak_sensor_demand_recorded_at_none_when_unset():
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    coordinator = FakeCoordinator(demand=demand)
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=0.0)
-    sensor = OecMonthPeakDemandSensor(coordinator, FakeEntry(), tracker)
+async def test_setup_skips_without_power_entity(hass):
+    add_entities = FakeAddEntities()
 
-    assert sensor.extra_state_attributes["demand_recorded_at"] is None
+    manager = await async_setup_demand_sensors(
+        hass, FakeEntry({}), FakeCoordinator(N72["demand_charges"]), _cache(hass), add_entities
+    )
 
-
-def test_monthly_demand_charge_sensor_exposes_demand_recorded_at():
-    coordinator = FakeCoordinator(demand={"rate": 7.434})
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
-    tracker.month_peak_recorded_at = datetime(2026, 7, 22, 17, 0)
-    sensor = OecMonthlyDemandChargeSensor(coordinator, FakeEntry(), tracker)
-
-    assert sensor.extra_state_attributes == {"demand_recorded_at": "2026-07-22T17:00:00"}
+    assert manager is None
+    assert add_entities.added == []
 
 
-def test_demand_surcharge_per_kwh_sensor_exposes_demand_recorded_at():
-    demand = {"rate": 7.434, "window_start": "16:00", "window_end": "21:00"}
-    tracker = make_tracker("16:00", "21:00", month_peak_kw=4.5)
-    tracker.month_peak_recorded_at = datetime(2026, 7, 22, 17, 0)
-    sensor = OecDemandSurchargePerKwhSensor(FakeCoordinator(demand), FakeEntry(), tracker)
+async def test_setup_skips_without_demand_charges(hass):
+    add_entities = FakeAddEntities()
 
-    assert sensor.extra_state_attributes == {"demand_recorded_at": "2026-07-22T17:00:00"}
+    manager = await async_setup_demand_sensors(
+        hass,
+        FakeEntry({"power_entity": POWER}),
+        FakeCoordinator([]),
+        _cache(hass),
+        add_entities,
+    )
+
+    assert manager is None
+    assert add_entities.added == []
 
 
-async def test_async_setup_demand_sensors_passes_the_dnsp_time_zone_to_the_tracker(hass):
-    demand = {
-        "rate": 11.473,
-        "window_start": "15:00",
-        "window_end": "21:00",
-        "days": "weekdays",
-        "season_months": None,
-        "measurement_method": "monthly_peak",
-    }
-    coordinator = FakeCoordinator(demand)
-    entry = FakeEntry({"power_entity": "sensor.power"})
+async def test_setup_builds_manager_and_three_entities(hass):
+    add_entities = FakeAddEntities()
+    cache = _cache(hass)
 
-    tracker = await async_setup_demand_sensors(hass, entry, coordinator, lambda entities: None)
+    manager = await async_setup_demand_sensors(
+        hass,
+        FakeEntry({"power_entity": POWER, "billing_day": 5}),
+        FakeCoordinator(N72["demand_charges"]),
+        cache,
+        add_entities,
+    )
 
-    assert tracker.time_zone == ZoneInfo("Australia/Melbourne")
+    assert isinstance(manager, DemandManager)
+    assert manager.power_entity_id == POWER
+    assert manager.billing_day == 5
+    assert manager.cache is cache
+    assert list(manager.trackers) == [charge_key(c) for c in N72["demand_charges"]]
+    assert [type(e) for e in add_entities.added] == [
+        OecMonthPeakDemandSensor,
+        OecMonthlyDemandChargeSensor,
+        OecDemandSurchargePerKwhSensor,
+    ]
+
+
+async def test_setup_defaults_billing_day_when_unset(hass):
+    manager = await async_setup_demand_sensors(
+        hass,
+        FakeEntry({"power_entity": POWER}),
+        FakeCoordinator(N72["demand_charges"]),
+        _cache(hass),
+        FakeAddEntities(),
+    )
+
+    assert manager.billing_day == 1

@@ -1,4 +1,6 @@
-"""Demand charge sensors for OEC Tariff."""
+"""Demand charge sensors for OEC Tariff, over the per-charge trackers of a DemandManager."""
+
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -8,56 +10,79 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
+from .charge_tracker import ChargeTracker
 from .const import CONF_BILLING_DAY, CONF_POWER_ENTITY, DEFAULT_BILLING_DAY, DOMAIN
 from .coordinator import OecTariffCoordinator
-from .demand_tracker import DemandTracker
+from .demand_manager import DemandManager
+from .demand_windows import window_hours
+from .window_cache import DemandWindowCache
 
 
 async def async_setup_demand_sensors(
     hass: HomeAssistant,
     entry: ConfigEntry,
     coordinator: OecTariffCoordinator,
+    cache: DemandWindowCache,
     async_add_entities: AddEntitiesCallback,
-) -> DemandTracker | None:
-    """Set up demand tracking sensors if configured."""
+) -> DemandManager | None:
+    """Set up the demand tracking sensors when a power entity is configured."""
     power_entity = entry.data.get(CONF_POWER_ENTITY)
     if not power_entity:
         return None
 
-    # Get demand config from tariff detail
     detail = coordinator.tariff_detail
-    if not detail or not detail.get("demand"):
+    demand_charges = detail.get("demand_charges") if detail else None
+    if not demand_charges:
         return None
 
-    demand = detail["demand"]
-    billing_day = entry.data.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY)
-
-    # Parse season_months from API response
-    season_months = demand.get("season_months")
-
-    tracker = DemandTracker(
+    manager = DemandManager(
         hass=hass,
         power_entity_id=power_entity,
-        measurement_method=demand["measurement_method"],
-        window_start=demand["window_start"],
-        window_end=demand["window_end"],
-        days=demand["days"],
-        season_months=season_months,
-        billing_day=billing_day,
-        time_zone=coordinator.dnsp_time_zone,
+        cache=cache,
+        demand_charges=demand_charges,
+        billing_day=entry.data.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY),
     )
 
-    entities = [
-        OecMonthPeakDemandSensor(coordinator, entry, tracker),
-        OecMonthlyDemandChargeSensor(coordinator, entry, tracker),
-        OecDemandSurchargePerKwhSensor(coordinator, entry, tracker),
-    ]
-    async_add_entities(entities)
+    async_add_entities(
+        [
+            OecMonthPeakDemandSensor(coordinator, entry, manager),
+            OecMonthlyDemandChargeSensor(coordinator, entry, manager),
+            OecDemandSurchargePerKwhSensor(coordinator, entry, manager),
+        ]
+    )
+    return manager
 
-    return tracker
+
+def _iso(when: datetime | None) -> str | None:
+    return when.isoformat() if when else None
+
+
+def _charge_id(tracker: ChargeTracker) -> dict:
+    """The `period` and `months` naming a tracker's charge in the `charges` attributes."""
+    period, months = tracker.key
+    return {"period": period, "months": list(months) if months is not None else None}
+
+
+def _rate(tracker: ChargeTracker) -> float:
+    return tracker.charge.get("rate") or 0.0
+
+
+class DemandStoredData(ExtraStoredData):
+    """The demand manager's saved state, kept by RestoreEntity."""
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def as_dict(self) -> dict:
+        return self._data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DemandStoredData":
+        return cls(data)
 
 
 class OecDemandBaseSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
@@ -67,12 +92,12 @@ class OecDemandBaseSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
         self,
         coordinator: OecTariffCoordinator,
         entry: ConfigEntry,
-        tracker: DemandTracker,
+        manager: DemandManager,
         key: str,
     ) -> None:
         """Initialize."""
         super().__init__(coordinator)
-        self._tracker = tracker
+        self._manager = manager
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
@@ -81,20 +106,25 @@ class OecDemandBaseSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
             "model": "Network Tariff",
         }
 
+    def _peak_tracker(self) -> ChargeTracker | None:
+        """The tracker with the highest chargeable peak, the first one on a tie."""
+        trackers = list(self._manager.trackers.values())
+        return max(trackers, key=lambda t: t.chargeable_demand, default=None)
+
     def _demand_recorded_at_iso(self) -> str | None:
-        """ISO timestamp of when the chargeable peak was recorded, if known."""
-        recorded_at = self._tracker.chargeable_demand_recorded_at
-        return recorded_at.isoformat() if recorded_at else None
+        """ISO timestamp of when the highest chargeable peak was recorded, if known."""
+        tracker = self._peak_tracker()
+        return _iso(tracker.chargeable_demand_recorded_at) if tracker else None
 
 
 class OecMonthPeakDemandSensor(OecDemandBaseSensor):
-    """Month-to-date peak demand sensor."""
+    """Highest chargeable peak demand across the charges."""
 
     def __init__(
-        self, coordinator: OecTariffCoordinator, entry: ConfigEntry, tracker: DemandTracker
+        self, coordinator: OecTariffCoordinator, entry: ConfigEntry, manager: DemandManager
     ) -> None:
         """Initialize."""
-        super().__init__(coordinator, entry, tracker, "month_peak_demand")
+        super().__init__(coordinator, entry, manager, "month_peak_demand")
         self._attr_name = "Month Peak Demand"
         self._attr_native_unit_of_measurement = "kW"
         self._attr_device_class = SensorDeviceClass.POWER
@@ -103,66 +133,66 @@ class OecMonthPeakDemandSensor(OecDemandBaseSensor):
         self._attr_icon = "mdi:chart-line-variant"
 
     async def async_added_to_hass(self) -> None:
-        """Restore state on startup."""
+        """Restore the manager's state, then start it."""
         await super().async_added_to_hass()
         last_state = await self.async_get_last_extra_data()
         if last_state:
-            self._tracker.restore_state(last_state.as_dict())
-        # Start tracking
-        self._tracker.start()
+            self._manager.restore_state(last_state.as_dict())
+        self._manager.start()
 
     async def async_will_remove_from_hass(self) -> None:
         """Stop tracking on removal."""
-        self._tracker.stop()
+        self._manager.stop()
 
     @property
     def native_value(self) -> float:
-        """Return current month peak demand."""
-        return self._tracker.chargeable_demand
+        """Return the highest chargeable peak across the charges."""
+        tracker = self._peak_tracker()
+        return tracker.chargeable_demand if tracker else 0.0
 
     @property
     def extra_state_attributes(self) -> dict:
-        """Return tracking metadata."""
+        """Return each charge's peak and the tracking metadata."""
+        trackers = list(self._manager.trackers.values())
+        charges = []
+        for tracker in trackers:
+            entry = {
+                **_charge_id(tracker),
+                "unit": tracker.charge.get("unit"),
+                "peak": tracker.chargeable_demand,
+                "demand_recorded_at": _iso(tracker.chargeable_demand_recorded_at),
+            }
+            if tracker.charge.get("unit") == "kVA":
+                entry["measured_as"] = "kW"
+            charges.append(entry)
         return {
-            "measurement_method": self._tracker.measurement_method,
-            "demand_window": f"{self._tracker.window_start.strftime('%H:%M')}-{self._tracker.window_end.strftime('%H:%M')}",
-            "demand_days": self._tracker.days,
-            "season_months": self._tracker.season_months,
-            "billing_day": self._tracker.billing_day,
-            "last_reset": self._tracker.last_reset.isoformat() if self._tracker.last_reset else None,
-            "previous_month_peak": self._tracker.previous_month_peak_kw,
-            "current_block_samples": len(self._tracker.current_block_samples),
-            "power_entity": self._tracker.power_entity_id,
+            "charges": charges,
+            "billing_day": self._manager.billing_day,
+            "last_reset": _iso(self._manager.last_reset),
+            "previous_month_peak": max(
+                (t.previous_month_peak_kw for t in trackers), default=0.0
+            ),
+            "current_block_samples": max(
+                (len(t.current_block_samples) for t in trackers), default=0
+            ),
+            "power_entity": self._manager.power_entity_id,
             "demand_recorded_at": self._demand_recorded_at_iso(),
         }
 
     @property
-    def extra_restore_state_data(self):
+    def extra_restore_state_data(self) -> DemandStoredData:
         """Return state to persist."""
-        from homeassistant.helpers.restore_state import ExtraStoredData
-
-        class DemandStoredData(ExtraStoredData):
-            def __init__(self, data):
-                self._data = data
-
-            def as_dict(self):
-                return self._data
-
-            @classmethod
-            def from_dict(cls, data):
-                return cls(data)
-
-        return DemandStoredData(self._tracker.save_state())
+        return DemandStoredData(self._manager.save_state())
 
 
 class OecMonthlyDemandChargeSensor(OecDemandBaseSensor):
-    """Monthly demand charge in dollars."""
+    """Monthly demand charge in dollars, summed over the charges."""
 
     def __init__(
-        self, coordinator: OecTariffCoordinator, entry: ConfigEntry, tracker: DemandTracker
+        self, coordinator: OecTariffCoordinator, entry: ConfigEntry, manager: DemandManager
     ) -> None:
         """Initialize."""
-        super().__init__(coordinator, entry, tracker, "monthly_demand_charge")
+        super().__init__(coordinator, entry, manager, "monthly_demand_charge")
         self._attr_name = "Monthly Demand Charge"
         self._attr_native_unit_of_measurement = "$"
         self._attr_device_class = SensorDeviceClass.MONETARY
@@ -171,28 +201,32 @@ class OecMonthlyDemandChargeSensor(OecDemandBaseSensor):
         self._attr_icon = "mdi:currency-usd"
 
     @property
-    def native_value(self) -> float | None:
-        """Return monthly demand charge."""
-        if self.coordinator.data and self.coordinator.data.get("detail"):
-            demand = self.coordinator.data["detail"].get("demand")
-            if demand:
-                return round(self._tracker.chargeable_demand * demand["rate"], 2)
-        return None
+    def native_value(self) -> float:
+        """Return the sum over charges of chargeable peak times rate."""
+        return round(
+            sum(t.chargeable_demand * _rate(t) for t in self._manager.trackers.values()), 2
+        )
 
     @property
     def extra_state_attributes(self) -> dict:
-        """Return tracking metadata."""
-        return {"demand_recorded_at": self._demand_recorded_at_iso()}
+        """Return each charge's amount."""
+        return {
+            "charges": [
+                {**_charge_id(t), "amount": round(t.chargeable_demand * _rate(t), 2)}
+                for t in self._manager.trackers.values()
+            ],
+            "demand_recorded_at": self._demand_recorded_at_iso(),
+        }
 
 
 class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
     """Demand surcharge amortized per kWh."""
 
     def __init__(
-        self, coordinator: OecTariffCoordinator, entry: ConfigEntry, tracker: DemandTracker
+        self, coordinator: OecTariffCoordinator, entry: ConfigEntry, manager: DemandManager
     ) -> None:
         """Initialize."""
-        super().__init__(coordinator, entry, tracker, "demand_surcharge_per_kwh")
+        super().__init__(coordinator, entry, manager, "demand_surcharge_per_kwh")
         self._attr_name = "Demand Surcharge"
         self._attr_native_unit_of_measurement = "$/kWh"
         self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -200,35 +234,20 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
         self._attr_icon = "mdi:lightning-bolt"
 
     @property
-    def native_value(self) -> float | None:
-        """Return rate / window hours per month, as tariff-service's demand-surcharge does."""
-        if not self.coordinator.data:
-            return None
+    def native_value(self) -> float:
+        """Return the sum over charges with a peak of rate / that charge's window hours.
 
-        detail = self.coordinator.data.get("detail")
-        if not detail or not detail.get("demand"):
-            return None
-
-        demand = detail["demand"]
-        peak_kw = self._tracker.chargeable_demand
-        if peak_kw <= 0:
-            return 0.0
-
-        # Calculate window hours per month
-        start = self._tracker.window_start
-        end = self._tracker.window_end
-        if start == end:
-            # "Applies at all other times" convention (e.g. Jemena/AusNet
-            # all-day demand windows) — the full day.
-            hours_per_day = 24.0
-        elif start <= end:
-            hours_per_day = (end.hour + end.minute / 60) - (start.hour + start.minute / 60)
-        else:
-            hours_per_day = (24 - start.hour - start.minute / 60) + (end.hour + end.minute / 60)
-
-        # Days the window runs in a 30-day month: weekdays 5/7, weekends 2/7.
-        window_days = {"weekdays": 30 * 5 / 7, "weekends": 30 * 2 / 7}.get(self._tracker.days, 30)
-        return round(demand["rate"] / (hours_per_day * window_days), 5)
+        The window hours are the charge's cached windows in the billing month.
+        """
+        cached = self._manager.cache.charges(dt_util.now())
+        total = 0.0
+        for key, tracker in self._manager.trackers.items():
+            if tracker.chargeable_demand <= 0 or key not in cached:
+                continue
+            hours = window_hours(cached[key].windows)
+            if hours > 0:
+                total += _rate(tracker) / hours
+        return round(total, 5)
 
     @property
     def extra_state_attributes(self) -> dict:

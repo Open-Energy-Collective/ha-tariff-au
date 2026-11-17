@@ -91,7 +91,7 @@ Samples every 30 seconds. Each demand charge on the tariff is measured on its ow
 | Demand Window | `active` when any charge's window covers now. `active_charges` lists which. |
 | Month Peak Demand | Highest chargeable peak across the charges. `charges` gives each charge's peak. |
 | Monthly Demand Charge | Sum over the charges of chargeable peak times rate. `charges` gives each amount. |
-| Demand Surcharge | Sum over the charges with a recorded peak of rate divided by that charge's window hours in the billing month. |
+| Demand Surcharge | Sum over the charges with a recorded peak and window hours this month of rate divided by that charge's window hours in the billing month. |
 
 Charges that bill the highest of the last 12 months (`rolling_12_months`) use that peak. Charges in kVA are measured from your kW sensor as a stand-in, so they read low, and their `charges` entry carries `"measured_as": "kW"`.
 

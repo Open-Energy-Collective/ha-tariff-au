@@ -9,7 +9,7 @@ Versions follow SemVer. Entries start at 1.2.2; earlier releases are on the GitH
 - Public holidays are excluded from the demand window where the distributor excludes them (Ausgrid and Endeavour).
 - Tariffs on standard time (Evoenergy 023) track the demand window at the right hour.
 - Tariffs with several demand charges measure each one with its own windows, method and rate. SAPN LBAD (peak and anytime) and Evoenergy 023 (peak and off-peak) are no longer reduced to one charge. Monthly Demand Charge is the sum over the charges.
-- Demand Surcharge sums, over the charges with a recorded peak, each charge's rate divided by that charge's exact window hours in the billing month, not the 5/7 and 2/7 estimate. It changes value after this update.
+- Demand Surcharge sums, over the charges with a recorded peak and window hours this month, each charge's rate divided by that charge's exact window hours in the billing month, not the 5/7 and 2/7 estimate. It changes value after this update.
 
 ### Changed
 - Requires tariff-service 0.10.0 or later. An older service gives no demand windows, so no demand is measured and Demand Window is unavailable. The integration logs a warning naming the minimum version.

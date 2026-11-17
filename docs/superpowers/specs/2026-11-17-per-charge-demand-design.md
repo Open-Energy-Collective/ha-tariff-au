@@ -165,7 +165,7 @@ The restored state from 1.2.x (one tracker) goes to the first charge in `demand_
 - Demand Surcharge uses exact window hours.
 - 1.2.x state migrates to the first charge in season.
 - On a 404 for part of the billing month, one retry ending at 1 July.
-- The rate comes from the latest windows entry; a dropped key bills until the reset.
+- The rate comes from the latest windows entry, or the latest tariff detail for a charge out of season. A key the latest tariff detail drops bills until the reset.
 - Fixtures are hand-written from #80, re-recorded after `0.10.0` deploys.
 
 ## Left to the builder

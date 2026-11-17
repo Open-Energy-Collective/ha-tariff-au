@@ -186,9 +186,10 @@ def windows_body(
     - `charges`: the charge dicts, e.g. `NASN12["demand_charges"]`.
     - `days`: the dates each charge gets a window on.
     - `spans`: per-charge `("HH:MM", "HH:MM")` or None (no windows), aligned with
-      `charges`. A charge with no window in the range is left out, as #80 says; or a callable `(charge, day) -> span or None`; or None for each
+      `charges`, or a callable `(charge, day) -> span or None`, or None for each
       charge's own `start` and `end`. An end at or before the start is on the next day,
       so `("00:00", "00:00")` is the whole day.
+      A charge with no window in the range is left out, as #80 says.
     - `tz`: the zone the spans are on (see `tariff_zone`).
     - `start`, `end`: the body's range; default the first day's midnight to the
       midnight after the last day.

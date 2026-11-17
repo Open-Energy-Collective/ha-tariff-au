@@ -79,6 +79,30 @@ def test_parse_charges_merges_versions_and_takes_latest_rate():
     assert [w[0].day for w in merged.windows] == [17, 18, 19, 20]
 
 
+def test_parse_charges_later_entry_listed_second_wins():
+    body = {
+        "charges": [
+            _entry(5.0, [11], [_win(17), _win(18)]),
+            _entry(6.0, [11], [_win(19), _win(20)]),
+        ]
+    }
+    merged = parse_charges(body)[("peak", (11,))]
+    assert merged.charge["rate"] == 6.0
+    assert [w[0].day for w in merged.windows] == [17, 18, 19, 20]
+
+
+def test_parse_charges_entry_without_windows_keeps_charge_fields():
+    body = {
+        "charges": [
+            _entry(5.0, [11], [_win(17)]),
+            _entry(9.0, [11], []),
+        ]
+    }
+    merged = parse_charges(body)[("peak", (11,))]
+    assert merged.charge["rate"] == 5.0
+    assert len(merged.windows) == 1
+
+
 def test_parse_charges_none_without_charges():
     assert parse_charges({"windows": []}) is None
 

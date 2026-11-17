@@ -310,3 +310,26 @@ async def test_scheduled_refresh_logs_a_failure(hass, hass_storage, caplog):
     await hass.async_block_till_done()
 
     assert "Demand windows refresh failed" in caplog.text
+
+
+async def test_failed_current_month_is_retried_when_next_month_succeeds(hass, hass_storage):
+    jan_start = datetime(2027, 1, 1, tzinfo=MELBOURNE)
+    first = DEC_START - timedelta(hours=30)  # November only: December is 30 h away
+    stale = DEC_START - timedelta(hours=3)  # 27 h later: stale, December within 24 h
+    coordinator = _coordinator(
+        [
+            _body(NOV_START, DEC_START),
+            DemandWindowsUnavailable("x", None),
+            _body(DEC_START, jan_start),
+            _body(NOV_START, DEC_START),
+        ]
+    )
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 1)
+    await cache.async_refresh(first)
+
+    await cache.async_refresh(stale)
+    assert cache.fetched_at == first
+
+    await cache.async_refresh(stale + timedelta(minutes=5))
+    assert _ranges(coordinator)[-1] == (NOV_START, DEC_START)
+    assert cache.fetched_at == stale + timedelta(minutes=5)

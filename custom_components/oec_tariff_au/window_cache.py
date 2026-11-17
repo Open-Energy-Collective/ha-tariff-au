@@ -121,7 +121,9 @@ class DemandWindowCache:
             self._months = [m for m in self._months if _utc(m.start) != _utc(month.start)]
             self._months.append(month)
             self._months.sort(key=lambda m: _utc(m.start))
-            self.fetched_at = now
+            # Only the month holding `now` is kept fresh, so only its fetch restarts the 24 h.
+            if (range_start, range_end) == (start, end):
+                self.fetched_at = now
             changed = True
 
         if changed:

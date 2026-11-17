@@ -1,5 +1,11 @@
 # Home Assistant Integration Development Rules
 
+## Overrides
+
+| Org rule | Replaced here by |
+|---|---|
+| `branching-strategy.md#milestone-releases`: tag the merge commit `vX.Y.Z` | Tag `X.Y.Z` without `v`, continuing tags `1.0.1` to `1.2.4`: `governance/adr/cross-project.md#2026-11-17-ha-tariff-au-keeps-xyz-tags` |
+
 ## Naming Convention
 - Repo: `ha-{name}` (e.g., `ha-tariff-au`) — per `naming-standards.md`, the `ha-` prefix
   is required by HACS convention even though it looks like it violates the no-prefix rule
@@ -85,14 +91,19 @@ tests/
 3. Don't commit broken tests "to fix later"
 
 ## Deployment to HA
-1. Develop in this repo's checkout
-2. Run tests: `.venv/bin/python -m pytest tests/ -v` — must all pass
-3. Rsync to `~/hass/Home_Assistant/custom_components/oec_tariff_au/`
-4. Force-add new files: `git add -f custom_components/oec_tariff_au/` (HA `.gitignore` has `*.*`)
-5. Commit and push HA repo
-6. Git pull on HA device, restart
-7. Delete and re-add integration when config structure changes
-8. Check HA logs for import errors after restart
+A release installs from its GitHub Release through HACS (the Marketplace from HA 2026.11).
+Before a release PR merges, its tip is installed on the HA instance by hand for the live check:
+
+1. `.venv/bin/python -m pytest tests/ -v`: all pass.
+2. On the HA instance, fetch the release branch:
+   `git clone --depth 1 --branch feat/X.Y.Z https://github.com/Open-Energy-Collective/ha-tariff-au.git`,
+   or its archive `https://github.com/Open-Energy-Collective/ha-tariff-au/archive/refs/heads/feat/X.Y.Z.tar.gz`.
+3. Copy `/config/custom_components/oec_tariff_au` to a backup outside `custom_components/`.
+4. Replace `/config/custom_components/oec_tariff_au` with the fetched `custom_components/oec_tariff_au`.
+5. `ha core restart`.
+6. Delete and re-add the integration when the config structure changes.
+7. Settings, System, Logs: no `oec_tariff_au` errors after the restart.
+8. After the Release is published, update through HACS and delete the backup.
 
 ## HACS Compatibility
 - Include `hacs.json` at repo root

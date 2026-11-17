@@ -136,7 +136,9 @@ class DemandManager:
 
         Runs inline as a @callback during the stop event, so it completes before the
         scheduled RestoreEntity dump (see the ha-tariff-au#8 investigation).
+        The listener removed itself on firing, so its removal function is spent.
         """
+        self._unsub_hass_stop = None
         self._flush_all()
 
     def start(self) -> None:
@@ -172,6 +174,7 @@ class DemandManager:
                 {
                     "period": key[0],
                     "months": list(key[1]) if key[1] is not None else None,
+                    "charge": tracker.charge,
                     "state": tracker.save_state(),
                 }
                 for key, tracker in self.trackers.items()
@@ -194,7 +197,10 @@ class DemandManager:
             state = saved.get("state", {})
             tracker = self.trackers.get(key)
             if tracker is None:
-                # A key the tariff no longer lists bills at its last rate until the reset.
-                charge = {"period": key[0], "months": months, "rate": state.get("rate")}
+                # A key the tariff no longer lists bills as last saved until the reset.
+                charge = {
+                    **saved.get("charge", {"period": key[0], "months": months}),
+                    "rate": state.get("rate"),
+                }
                 tracker = self.trackers[key] = ChargeTracker(key, charge)
             tracker.restore_state(state)

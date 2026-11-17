@@ -1,5 +1,6 @@
 """Tests for the demand manager: one ChargeTracker per charge, fed from the window cache."""
 
+import logging
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -7,11 +8,13 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 
+from custom_components.oec_tariff_au.charge_tracker import ChargeTracker
+from custom_components.oec_tariff_au.coordinator import DemandWindowsUnavailable
 from custom_components.oec_tariff_au.demand_manager import DemandManager
 from custom_components.oec_tariff_au.demand_windows import charge_key
 from custom_components.oec_tariff_au.window_cache import DemandWindowCache
 
-from .fixtures import EVO_023, LBAD, N72, tariff_zone, windows_body
+from .fixtures import EA302, EVO_023, LBAD, N72, tariff_zone, windows_body
 
 POWER = "sensor.grid_power"
 ENTRY_ID = "entry1"
@@ -121,18 +124,44 @@ async def test_lbad_concurrent_charges_both_measure(hass):
 
 async def test_no_cover_measures_nothing(hass):
     await hass.config.async_set_time_zone("Australia/Adelaide")
-    now = datetime(2027, 1, 15, 18, 0, tzinfo=ZoneInfo("Australia/Adelaide"))
-    cache = DemandWindowCache(hass, _coordinator(LBAD), ENTRY_ID, 1)
-    manager = DemandManager(hass, POWER, cache, LBAD["demand_charges"], 1)
-    manager.last_reset = now.replace(day=1, hour=0)
-    before = [t.save_state() for t in manager.trackers.values()]
+    adelaide = ZoneInfo("Australia/Adelaide")
+    month_start = datetime(2027, 6, 15, tzinfo=adelaide)
+    first_july = datetime(2027, 7, 1, tzinfo=adelaide)
+    days = [month_start.date() + timedelta(days=n) for n in range(16)]
+    # The 15 June billing month 404s; its retry ends at 1 July, so cover stops there.
+    coordinator = SimpleNamespace(
+        async_fetch_demand_windows=AsyncMock(
+            side_effect=[
+                DemandWindowsUnavailable("not found", 404),
+                windows_body(
+                    LBAD["demand_charges"],
+                    days,
+                    _in_season,
+                    tz=adelaide,
+                    start=month_start,
+                    end=first_july,
+                ),
+            ]
+        ),
+        dnsp_time_zone=adelaide,
+    )
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 15)
+    await cache.async_refresh(datetime(2027, 6, 20, 12, 0, tzinfo=adelaide))
+    manager = DemandManager(hass, POWER, cache, LBAD["demand_charges"], 15)
+    manager.last_reset = month_start
+    anytime = _tracker(manager, LBAD["demand_charges"][1])
     _power(hass, 3.0)
 
-    manager._async_sample(now)
-    manager._async_sample(now + timedelta(minutes=30))
+    manager._async_sample(first_july - timedelta(minutes=10))
+    assert anytime.current_block_samples == [3.0]
 
-    assert [t.save_state() for t in manager.trackers.values()] == before
+    _power(hass, 7.0)
+    manager._async_sample(first_july + timedelta(minutes=5))
+
+    assert not cache.covers(first_july)
+    assert anytime.month_peak_kw == 3.0
     assert all(not t.current_block_samples for t in manager.trackers.values())
+    assert all(t.current_block_start is None for t in manager.trackers.values())
 
 
 async def test_billing_reset_resets_all_and_refreshes_cache(hass):
@@ -228,7 +257,45 @@ async def test_restore_1_2_x_blob_goes_to_first_charge(hass):
     assert manager.last_reset == datetime.fromisoformat("2026-11-01T00:00:30+11:00")
 
 
-async def test_hass_stop_flushes_every_tracker(hass):
+async def test_restore_v2_keeps_dropped_rolling_key(hass):
+    now = datetime(2027, 1, 15, 18, 0, tzinfo=ZoneInfo("Australia/Sydney"))
+    rolling = {**EA302["demand_charges"][0], "rate": 12.5}
+    old, _, _ = await _setup(hass, EA302, now)
+    old.trackers.clear()
+    dropped = charge_key(rolling)
+    old.trackers[dropped] = ChargeTracker(dropped, rolling)
+    tracker = old.trackers[dropped]
+    tracker.month_peak_kw = 4.0
+    tracker.reset_billing_month(now)
+    tracker.month_peak_kw = 1.5
+    saved = old.save_state()
+
+    manager, _, _ = await _setup(hass, N72, now)
+    manager.restore_state(saved)
+
+    restored = manager.trackers[dropped]
+    assert restored.charge["rate"] == 12.5
+    assert restored.charge["peak_period"] == "rolling_12_months"
+    assert restored.chargeable_demand == 4.0
+    assert [charge_key(c) for c in N72["demand_charges"]] == list(manager.trackers)[:2]
+
+
+async def test_restore_v2_entry_without_charge_uses_state_rate(hass):
+    await hass.config.async_set_time_zone("Australia/Sydney")
+    cache = DemandWindowCache(hass, _coordinator(N72), ENTRY_ID, 1)
+    manager = DemandManager(hass, POWER, cache, N72["demand_charges"], 1)
+    state = {"month_peak_kw": 2.0, "rate": 9.9}
+
+    entry = {"period": "off_peak", "months": None, "state": state}
+
+    manager.restore_state({"version": 2, "last_reset": None, "trackers": [entry]})
+
+    tracker = manager.trackers[("off_peak", None)]
+    assert tracker.charge == {"period": "off_peak", "months": None, "rate": 9.9}
+    assert tracker.month_peak_kw == 2.0
+
+
+async def test_hass_stop_flushes_every_tracker(hass, caplog):
     now = datetime(2027, 1, 15, 18, 0, tzinfo=ZoneInfo("Australia/Adelaide"))
     manager, _, _ = await _setup(hass, LBAD, now)
     manager.start()
@@ -242,3 +309,4 @@ async def test_hass_stop_flushes_every_tracker(hass):
         assert tracker.month_peak_kw == 2.5
         assert tracker.current_block_samples == []
     manager.stop()
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]

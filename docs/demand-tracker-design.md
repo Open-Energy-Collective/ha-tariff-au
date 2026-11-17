@@ -1,5 +1,7 @@
 # Demand Charge Tracker — Design Document
 
+Superseded by [the per-charge demand design](superpowers/specs/2026-11-17-per-charge-demand-design.md). The window logic below was deleted with it.
+
 ## Overview
 
 The OEC Tariff HA integration will track real-time grid power consumption and calculate demand charges based on the DNSP's specific methodology. This is independent of any other integration (PowerSync, Amber, etc.) — it only needs a power sensor entity.

@@ -2,11 +2,16 @@
 
 Each tariff dict holds its `demand_charges` list copied verbatim from tariff-service
 `seed/*.json`, with the DNSP's time zone and the tariff's time basis. `windows_body`
-builds a `/calculate/demand-windows` body by hand from tariff-service #80's schema.
+builds a `/calculate/demand-windows` body by hand from tariff-service #80's schema, so a
+test can ask for any range. `RECORDED` holds one body per tariff recorded from the live
+tariff-service 0.10.0 for `RECORDED_RANGE`; `test_fixtures.py` checks `windows_body`
+against them.
 """
 
+import json
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
@@ -146,6 +151,20 @@ LBAD = {'tariff': 'LBAD',
                      'peak_period': 'rolling_12_months'}]}
 
 TARIFFS = {t["tariff"]: t for t in (NASN12, N72, EVO_023, EA302, A230, LBAD)}
+
+# Monday 11 to Sunday 17 January 2027, local midnight to local midnight: the week of the
+# tests' Friday 15 January. No public holiday falls in it in NSW, ACT, Victoria or SA.
+RECORDED_RANGE = (date(2027, 1, 11), date(2027, 1, 18))
+
+# `/calculate/demand-windows` bodies recorded from tariff-service 0.10.0 on 2026-11-19 for
+# RECORDED_RANGE, keyed by tariff code, verbatim from `tests/recorded/`.
+RECORDED = {
+    t["tariff"]: json.loads(
+        (Path(__file__).parent / "recorded" / f"demand_windows_{t['dnsp']}_{t['tariff']}.json")
+        .read_text()
+    )
+    for t in TARIFFS.values()
+}
 
 Span = tuple[str, str] | None
 SpanFn = Callable[[dict, date], Span]

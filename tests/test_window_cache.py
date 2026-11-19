@@ -227,6 +227,36 @@ async def test_months_ended_before_now_are_pruned(hass, hass_storage):
     assert not cache.covers(NOW)
 
 
+
+async def test_billing_day_change_drops_months_cached_on_the_old_day(hass, hass_storage):
+    await DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1).async_refresh(NOW)
+    nov_15 = datetime(2026, 11, 15, tzinfo=MELBOURNE)
+    dec_15 = datetime(2026, 12, 15, tzinfo=MELBOURNE)
+    coordinator = _coordinator()
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 15)
+
+    await cache.async_load()
+    assert not cache.covers(NOW)
+
+    await cache.async_refresh(NOW + timedelta(hours=1))
+
+    assert _ranges(coordinator) == [(nov_15, dec_15)]
+    assert cache.month_end(datetime(2026, 11, 30, 12, 0, tzinfo=MELBOURNE)) == dec_15
+    months = hass_storage[STORE_KEY]["data"]["months"]
+    assert [(m["start"], m["end"]) for m in months] == [(nov_15.isoformat(), dec_15.isoformat())]
+
+
+async def test_billing_day_change_rewrites_the_store_when_the_fetch_fails(hass, hass_storage):
+    await DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1).async_refresh(NOW)
+    coordinator = _coordinator(DemandWindowsUnavailable("down"))
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 15)
+
+    await cache.async_load()
+    await cache.async_refresh(NOW + timedelta(hours=1))
+
+    assert hass_storage[STORE_KEY]["data"]["months"] == []
+    assert not cache.covers(NOW)
+
 async def test_listener_called_after_change(hass, hass_storage):
     cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
     calls = []

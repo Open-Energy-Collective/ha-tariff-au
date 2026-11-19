@@ -65,6 +65,7 @@ class DemandWindowCache:
         self._refresh_lock = asyncio.Lock()
         self.fetched_at: datetime | None = None
         self._month_attempted_at: datetime | None = None
+        self._dropped_on_load = False
 
     async def async_load(self) -> None:
         """Restore the cached months from the Store. Sends no request."""
@@ -77,13 +78,13 @@ class DemandWindowCache:
             charges = parse_charges(saved["body"])
             if charges is None:
                 continue
+            start = datetime.fromisoformat(saved["start"])
+            if not self._starts_a_billing_month(start):
+                # Cached on an earlier billing day; the next refresh saves the Store without it.
+                self._dropped_on_load = True
+                continue
             self._months.append(
-                _Month(
-                    datetime.fromisoformat(saved["start"]),
-                    datetime.fromisoformat(saved["end"]),
-                    saved["body"],
-                    charges,
-                )
+                _Month(start, datetime.fromisoformat(saved["end"]), saved["body"], charges)
             )
 
     @callback
@@ -105,7 +106,8 @@ class DemandWindowCache:
             await self._async_refresh(now)
 
     async def _async_refresh(self, now: datetime) -> None:
-        changed = self._prune(now)
+        changed = self._prune(now) or self._dropped_on_load
+        self._dropped_on_load = False
         start, end = billing_month_range(dt_util.as_local(now), self._billing_day)
         stale = self.fetched_at is None or _utc(now) - _utc(self.fetched_at) >= REFRESH_AGE
 
@@ -170,9 +172,21 @@ class DemandWindowCache:
     def _month_holding(self, when: datetime) -> _Month | None:
         return next((m for m in self._months if m.holds(when)), None)
 
+    def _starts_a_billing_month(self, start: datetime) -> bool:
+        """Return True when `start` begins a billing month for the current billing day."""
+        month_start, _ = billing_month_range(dt_util.as_local(start), self._billing_day)
+        return _utc(month_start) == _utc(start)
+
     def _prune(self, now: datetime) -> bool:
-        """Drop months that ended at or before `now`. Returns True when any was dropped."""
-        kept = [m for m in self._months if _utc(m.end) > _utc(now)]
+        """Drop months that ended at or before `now`, or that start off the billing day.
+
+        Returns True when any was dropped.
+        """
+        kept = [
+            m
+            for m in self._months
+            if _utc(m.end) > _utc(now) and self._starts_a_billing_month(m.start)
+        ]
         dropped = len(kept) != len(self._months)
         self._months = kept
         return dropped

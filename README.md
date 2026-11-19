@@ -60,7 +60,7 @@ Entity IDs follow the pattern `sensor.tariff_{dnsp}_{tariff}_{name}`. For exampl
 | `sensor.tariff_energex_3900_current_rate` | $/kWh | Active energy rate now |
 | `sensor.tariff_energex_3900_current_period` | — | peak, off_peak, shoulder, solar_soak |
 | `sensor.tariff_energex_3900_daily_supply_charge` | $/day | Fixed daily network charge |
-| `sensor.tariff_energex_3900_demand_rate` | $/kW/month | Demand charge rate |
+| `sensor.tariff_energex_3900_demand_rate` | $/kW/month | Highest rate among the demand charges in season now |
 | `sensor.tariff_energex_3900_tariff_name` | — | Human-readable tariff name |
 | `sensor.tariff_energex_3900_demand_window` | — | Whether demand is being measured: `active`, `inactive` |
 
@@ -68,8 +68,8 @@ Entity IDs follow the pattern `sensor.tariff_{dnsp}_{tariff}_{name}`. For exampl
 
 | Entity | Unit | Description |
 |--------|------|-------------|
-| `sensor.tariff_energex_3900_month_peak_demand` | kW | Highest measured demand this billing month |
-| `sensor.tariff_energex_3900_monthly_demand_charge` | $ | peak_kW × demand_rate |
+| `sensor.tariff_energex_3900_month_peak_demand` | kW | Highest chargeable peak across the demand charges: this billing month, or the last 12 months for a rolling charge |
+| `sensor.tariff_energex_3900_monthly_demand_charge` | $ | Sum over the demand charges of chargeable peak times rate |
 | `sensor.tariff_energex_3900_demand_surcharge` | $/kWh | Demand charge amortized per kWh |
 
 ### Demand Tracking Details

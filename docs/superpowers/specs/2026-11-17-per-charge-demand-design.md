@@ -2,7 +2,7 @@
 
 - **Issue:** ha-tariff-au #16 (`Advances: PRICE-06`), release `feat/1.3.0`.
 - **Depends on:** tariff-service #80 (`feat/0.10.0`), `/calculate/demand-windows` listing each charge's own windows.
-- **Status:** awaiting the maintainer's approval.
+- **Status:** approved by the maintainer 2026-11-17.
 
 ## Intent
 
@@ -70,7 +70,7 @@ flowchart LR
   - Once a day, to pick up a new tariff version.
   - Whenever the cache does not cover the next 24 hours.
 - **Rate limits.** Every request goes through the coordinator's session and the shared 429 backoff from #18.
-- **Cache.** The last response is kept in a `homeassistant.helpers.storage.Store` per config entry. A restart during a service outage keeps measuring until the cached range ends.
+- **Cache.** The last response is kept in a `homeassistant.helpers.storage.Store` per config entry. While the demand-windows request fails, measuring continues from the Store until the cached range ends, across a restart too, as long as the rest of the service answers. A restart while the whole service is down waits for it, as setup does on main: the first refresh of the current rate must succeed.
 - **No cover.** If the cache does not cover now:
   - trackers measure nothing;
   - Demand Window is unavailable;
@@ -144,7 +144,7 @@ The restored state from 1.2.x (one tracker) goes to the first charge in `demand_
   - LBAD: two concurrent kVA charges, each measured from kW with `measured_as: kW`.
 - A sample lands in the right tracker at window bounds: start inclusive, end exclusive, across a daylight saving change.
 - Window cache:
-  - a restart keeps measuring from the Store;
+  - a restart keeps measuring from the Store while only the demand-windows request fails;
   - no cover means no measurement and Demand Window unavailable;
   - a response without `charges` is treated as no cover.
 - The billing reset fetches the new month and rolls every tracker.

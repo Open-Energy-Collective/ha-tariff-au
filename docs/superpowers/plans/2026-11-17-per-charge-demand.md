@@ -39,10 +39,10 @@ tracking: [ha-tariff-au#16, tariff-service#80]
 
 ## Review Focus
 
-1. **Restart during an outage.** The Store holds the month and the service is down. Measuring continues and Demand Window keeps scheduling. Test: Task 3, `test_cache_loads_from_store_without_fetching`.
+1. **Restart during a demand-windows outage.** The Store holds the month and the demand-windows request fails; the rest of the service answers. Measuring continues and Demand Window keeps scheduling. Test: Task 3, `test_cache_loads_from_store_without_fetching`.
 2. **Two entries during a 429 backoff.** A windows refresh during backoff sends no request and keeps the cached month. Test: Task 1, `test_fetch_demand_windows_honours_shared_backoff`.
 3. **Daylight saving end inside a window.** The repeated hour on a local-clock tariff counts once per instant, and the block alignment does not double a block. Test: Task 2, `test_in_windows_across_dst_end`.
-4. **First setup with the service down and no Store.** Setup completes, the demand entities exist, and Demand Window is unavailable. Test: Task 6, `test_setup_with_no_cover_creates_entities_unavailable`.
+4. **First setup with demand windows unavailable and no Store.** Only the demand-windows request fails. Setup completes, the demand entities exist, and Demand Window is unavailable. Test: Task 6, `test_setup_with_no_cover_creates_entities_unavailable`.
 5. **Billing day 28, February.** The range runs from 28 February to 28 March. A sample on 1 March is in the February month. Test: Task 2, `test_billing_month_range_day_28`.
 
 ---

@@ -18,6 +18,9 @@ _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 REFRESH_AGE = timedelta(hours=24)
+# A month cut at an unseeded 1 July leaves the next 24 h uncovered; its range is refetched
+# at most this often, so each update does not repeat the 404 and its retry.
+CUT_MONTH_RETRY_AGE = timedelta(hours=1)
 MIN_SERVICE_VERSION = "0.10.0"
 
 
@@ -61,6 +64,7 @@ class DemandWindowCache:
         self._old_service_warned = False
         self._refresh_lock = asyncio.Lock()
         self.fetched_at: datetime | None = None
+        self._month_attempted_at: datetime | None = None
 
     async def async_load(self) -> None:
         """Restore the cached months from the Store. Sends no request."""
@@ -111,10 +115,17 @@ class DemandWindowCache:
         ahead = now + REFRESH_AGE
         if not self.covers(ahead):
             ahead_range = billing_month_range(dt_util.as_local(ahead), self._billing_day)
-            if ahead_range not in ranges:
+            recently_tried = (
+                ahead_range == (start, end)
+                and self._month_attempted_at is not None
+                and _utc(now) - _utc(self._month_attempted_at) < CUT_MONTH_RETRY_AGE
+            )
+            if ahead_range not in ranges and not recently_tried:
                 ranges.append(ahead_range)
 
         for range_start, range_end in ranges:
+            if (range_start, range_end) == (start, end):
+                self._month_attempted_at = now
             month = await self._async_fetch(range_start, range_end, now)
             if month is None:
                 continue

@@ -269,6 +269,37 @@ async def test_refresh_fetches_when_next_24h_uncovered(hass, hass_storage):
     assert cache.covers(first_july + timedelta(hours=1))
 
 
+
+async def test_fetch_before_an_unseeded_1_july_is_at_most_hourly(hass, hass_storage):
+    """A fresh month cut at 1 July is refetched at most hourly in the last 24 h before it."""
+    start = datetime(2027, 6, 15, tzinfo=MELBOURNE)
+    first_july = datetime(2027, 7, 1, tzinfo=MELBOURNE)
+    month_end = datetime(2027, 7, 15, tzinfo=MELBOURNE)
+    fetched = datetime(2027, 6, 30, 1, 0, tzinfo=MELBOURNE)
+
+    def unseeded_after_june(range_start, range_end):
+        if range_end == month_end:
+            raise DemandWindowsUnavailable("not found", 404)
+        return _body(range_start, range_end)
+
+    coordinator = _coordinator(unseeded_after_june)
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 15)
+    await cache.async_refresh(fetched)
+    assert _ranges(coordinator) == [(start, month_end), (start, first_july)]
+
+    for minutes in range(5, 60, 5):
+        await cache.async_refresh(fetched + timedelta(minutes=minutes))
+    assert coordinator.async_fetch_demand_windows.call_count == 2
+
+    await cache.async_refresh(fetched + timedelta(minutes=60))
+    assert _ranges(coordinator)[2:] == [(start, month_end), (start, first_july)]
+
+    for minutes in range(65, 23 * 60, 5):
+        await cache.async_refresh(fetched + timedelta(minutes=minutes))
+    # One fetch and its 404 retry per hour: the first, then hours 1 to 22.
+    assert coordinator.async_fetch_demand_windows.call_count == 2 * 23
+    assert cache.covers(first_july - timedelta(minutes=1))
+
 async def test_404_after_1_july_skips_retry_and_caches_nothing(hass, hass_storage):
     coordinator = _coordinator(DemandWindowsUnavailable("not found", 404))
     cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 15)

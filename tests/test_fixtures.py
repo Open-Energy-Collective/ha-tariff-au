@@ -1,39 +1,35 @@
 """The hand-built demand-windows bodies against bodies recorded from tariff-service 0.10.0.
 
 Most tests need a body for an arbitrary billing month, some outside the 2026-27 price
-lists, so they keep `windows_body`. These tests hold it to the recorded live bodies over
-`RECORDED_RANGE`, compared the way the integration reads them: per charge key, as UTC
-instants, clipped to the body's range, with touching windows merged.
+lists, so they keep the generator: `windows_coordinator` serves `range_body`. These tests
+hold `range_body` to the recorded live bodies over `RECORDED_RANGE`. The comparison
+matches window membership: per charge key, the UTC instants each body's windows cover,
+cut to the body's range with touching windows joined. The integration itself neither
+cuts nor joins windows: `window_hours` sums the raw cached windows.
 
-#80 as built differs from `windows_body` only in form the integration does not read:
-- live fills the top-level `windows`; `windows_body` leaves it empty;
-- live states every window on the DNSP's local clock; `windows_body` states a
-  `standard` tariff's windows on the fixed standard offset (the same instants);
-- live clips windows to the range and merges touching ones, so an `anytime` charge
-  is one window and an overnight window is cut at the range ends;
+#80 as built differs from `range_body` in form:
+- live fills the top-level `windows`; `range_body` leaves it empty, and the integration
+  does not read it;
+- live states every window on the DNSP's local clock; `range_body` states a `standard`
+  tariff's windows on the fixed standard offset (the same instants);
+- live joins touching windows, so an `anytime` charge is one window for the range where
+  `range_body` gives one per day (the same hours);
 - live gives a charge without `public_holidays` the field as null.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 
 from custom_components.oec_tariff_au.demand_windows import charge_key, parse_charges
 
-from .fixtures import RECORDED, RECORDED_RANGE, TARIFFS, in_season, tariff_zone, windows_body
+from .fixtures import RECORDED, RECORDED_RANGE, TARIFFS, in_season, range_body, tariff_zone
 
 Interval = tuple[datetime, datetime]
 
 
-def _on_charge_days(charge: dict, day: date):
-    """A charge's own span on its months and days. The range holds no public holiday."""
-    if charge["days"] == "weekdays" and day.weekday() >= 5:
-        return None
-    return in_season(charge, day)
-
-
 def _normalised(body: dict) -> dict:
-    """Per charge key: the windows as UTC intervals, clipped to the range, touching merged."""
+    """Per charge key: the windows as UTC intervals, cut to the range, touching joined."""
     lower = datetime.fromisoformat(body["start"]).astimezone(timezone.utc)
     upper = datetime.fromisoformat(body["end"]).astimezone(timezone.utc)
     result = {}
@@ -54,14 +50,11 @@ def _normalised(body: dict) -> dict:
 
 
 def _generated(tariff: dict) -> dict:
-    """`windows_body` for the recorded range, from the day before so overnight windows reach in."""
+    """`range_body` for the recorded range. The range holds no public holiday."""
     recorded = RECORDED[tariff["tariff"]]
-    first, end = RECORDED_RANGE
-    days = [first - timedelta(days=1) + timedelta(days=n) for n in range((end - first).days + 1)]
-    return windows_body(
+    return range_body(
         tariff["demand_charges"],
-        days,
-        _on_charge_days,
+        in_season,
         tz=tariff_zone(tariff),
         dnsp=tariff["dnsp"],
         tariff=tariff["tariff"],

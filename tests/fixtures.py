@@ -252,11 +252,51 @@ def windows_body(
 
 
 def in_season(charge: dict, day: date) -> Span:
-    """Each charge's own span on the days of its months, none outside them."""
+    """Each charge's own span on its days of its months, none outside them.
+
+    `days: weekdays` gives no window on Saturday or Sunday. Public holidays are not
+    modelled: a `public_holidays: excluded` charge still gets a window on a holiday.
+    """
     months = charge["months"]
     if months is not None and day.month not in months:
         return None
+    if charge.get("days") == "weekdays" and day.weekday() >= 5:
+        return None
     return charge["start"], charge["end"]
+
+
+def range_body(
+    charges: list[dict],
+    spans: Sequence[Span] | SpanFn | None,
+    *,
+    tz: tzinfo,
+    start: datetime,
+    end: datetime,
+    dnsp: str = "ausnet",
+    tariff: str = "NASN12",
+) -> dict:
+    """A `windows_body` for [start, end) with each window cut to the range, as #80 does.
+
+    Days run from the day before `start`, so an overnight window reaches into the range.
+    A charge left with no window is left out.
+    """
+    first = start.astimezone(tz).date() - timedelta(days=1)
+    last = (end - timedelta(microseconds=1)).astimezone(tz).date()
+    days = [first + timedelta(days=n) for n in range((last - first).days + 1)]
+    body = windows_body(
+        charges, days, spans, tz=tz, dnsp=dnsp, tariff=tariff, start=start, end=end
+    )
+    entries = []
+    for entry in body["charges"]:
+        windows = []
+        for window in entry["windows"]:
+            opens = max(datetime.fromisoformat(window["start"]), start)
+            closes = min(datetime.fromisoformat(window["end"]), end)
+            if opens < closes:
+                windows.append({"start": opens.isoformat(), "end": closes.isoformat()})
+        if windows:
+            entries.append({**entry, "windows": windows})
+    return {**body, "charges": entries}
 
 
 def windows_coordinator(
@@ -264,15 +304,14 @@ def windows_coordinator(
 ) -> SimpleNamespace:
     """A fake coordinator whose demand-windows bodies hold `charges` (default the tariff's).
 
-    Each body covers the requested range, one window per charge per day from `spans`.
+    Each body covers the requested range from `range_body`: one window per charge per
+    day from `spans`, cut to the range.
     """
     zone = tariff_zone(tariff)
 
     def fetch(start: datetime, end: datetime) -> dict:
-        days = [start.date() + timedelta(days=n) for n in range((end.date() - start.date()).days)]
-        return windows_body(
+        return range_body(
             charges if charges is not None else tariff["demand_charges"],
-            days,
             spans,
             tz=zone,
             start=start,

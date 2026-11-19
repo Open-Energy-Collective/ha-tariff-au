@@ -13,7 +13,7 @@ Versions follow SemVer. Entries start at 1.2.2; earlier releases are on the GitH
 
 ### Changed
 - Requires tariff-service 0.10.0 or later. An older service gives no demand windows, so no demand is measured and Demand Window is unavailable. The integration logs a warning naming the minimum version.
-- The integration no longer reads the tariff detail's `demand` object. Demand windows come from the tariff service, and the last response is cached so a restart during an outage keeps measuring until the cached range ends.
+- The integration no longer reads the tariff detail's `demand` object. Demand windows come from the tariff service, and the last demand-windows response is cached. Measuring continues while the demand-windows request fails, including across a restart, as long as the tariff service otherwise answers. A restart while the whole tariff service is down waits for it, as before.
 - Demand Rate attributes: `window_start`, `window_end`, `days`, `season_months` and `measurement_method` are removed. `charges` is added, listing each charge's `period`, `rate`, `unit`, `months`, `start`, `end`, `days`, `public_holidays`, `measurement_method` and `peak_period`. Its value is the highest rate among the charges in season, or `0.0` when none is.
 - Month Peak Demand attributes: `demand_window`, `demand_days`, `season_months` and `measurement_method` are removed. `charges` is added, with each charge's peak, `demand_recorded_at`, `measurement_method` and `peak_period`. Its value is the highest chargeable peak across the charges.
 - Monthly Demand Charge gains a `charges` attribute with each charge's amount.

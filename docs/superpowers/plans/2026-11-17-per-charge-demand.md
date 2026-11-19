@@ -347,8 +347,9 @@ class DemandManager:
 **Blocked by:** tariff-service `0.10.0` live.
 
 **Files:**
+- Create: `tests/recorded/demand_windows_<dnsp>_<tariff>.json`, `tests/test_fixtures.py`
 - Modify: `tests/fixtures.py`
 
-- [ ] **Step 1:** For each fixture tariff, call the live `/calculate/demand-windows` for a 7-day range that holds the fixture's dates. Replace the hand-built bodies with the recorded ones, trimmed to those dates.
+- [ ] **Step 1:** For each fixture tariff, call the live `/calculate/demand-windows` for a 7-day range that holds the fixture's dates and commit the bodies verbatim under `tests/recorded/`. `windows_body` stays the generator, since the tests build whole billing months and use dates outside the price lists; `tests/test_fixtures.py` asserts it gives the recorded windows per charge key, and that the fixture `demand_charges` fields equal the live charge fields.
 - [ ] **Step 2: Run the full suite, expect PASS.** A failure is a mismatch between the hand-built shape and #80 as built: report it to Architecture, don't edit the assertion.
 - [ ] **Step 3: Commit** `test: demand window fixtures recorded from tariff-service 0.10.0 (#16)`

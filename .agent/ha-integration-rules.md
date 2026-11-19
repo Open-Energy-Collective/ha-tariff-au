@@ -68,7 +68,9 @@ custom_components/{domain}/
 tests/
 ├── __init__.py
 ├── conftest.py              # Shared fixtures (enable_custom_integrations)
-├── fixtures.py              # Seed demand_charges and demand-windows bodies
+├── fixtures.py              # Seed demand_charges, the demand-windows body generator, RECORDED
+├── recorded/                # Live tariff-service demand-windows bodies, verbatim
+├── test_fixtures.py         # The generator reproduces the recorded live windows
 ├── test_demand_windows.py   # Pure logic: in_windows(), next_transition(), window_hours()
 ├── test_window_cache.py     # Window cache: Store, refresh triggers, 404 retry, no cover
 ├── test_charge_tracker.py   # Per-charge blocks, methods, rolling 12 months

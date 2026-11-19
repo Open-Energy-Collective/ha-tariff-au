@@ -8,6 +8,7 @@ import pytest
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMockResponse
 
 from custom_components.oec_tariff_au.const import (
     CONF_API_URL,
@@ -301,6 +302,58 @@ async def test_429_is_logged_once_per_backoff(hass, aioclient_mock, freezer, cap
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
     assert len(rate_limit_warnings(caplog)) == 2
+
+
+
+def mock_rate_starting_a_backoff(aioclient_mock, hass, seconds=60):
+    """A current-rate answer during which another entry's 429 starts the shared backoff."""
+
+    async def rate_then_backoff(method, url, data):
+        hass.data[BACKOFF_UNTIL][DEFAULT_API_URL.rstrip("/")] = dt_util.utcnow() + timedelta(
+            seconds=seconds
+        )
+        return AiohttpClientMockResponse(method, url, json={"rate": 0.1343})
+
+    aioclient_mock.get(RATE_URL, side_effect=rate_then_backoff)
+    aioclient_mock.get(DNSPS_URL, json=DNSPS)
+    aioclient_mock.get(DETAIL_URL, json={"demand": None})
+
+
+async def test_no_time_zone_request_during_a_backoff_started_mid_update(
+    hass, aioclient_mock, caplog
+):
+    mock_rate_starting_a_backoff(aioclient_mock, hass)
+    coordinator = make_coordinator(hass)
+
+    with pytest.raises(UpdateFailed, match="Rate limited") as err:
+        await coordinator._async_update_data()
+
+    assert err.value.retry_after is not None
+    assert calls_to(aioclient_mock, DNSPS_URL) == []
+    assert calls_to(aioclient_mock, DETAIL_URL) == []
+    assert rate_limit_warnings(caplog) == []
+
+
+async def test_no_tariff_detail_request_during_a_backoff_started_mid_update(
+    hass, aioclient_mock, freezer, caplog
+):
+    mock_rate_starting_a_backoff(aioclient_mock, hass, seconds=60)
+    coordinator = make_coordinator(hass)
+    coordinator.dnsp_time_zone = ZoneInfo("Australia/Melbourne")
+
+    data = await coordinator._async_update_data()
+
+    assert data["rate"] == {"rate": 0.1343}
+    assert data["detail"] is None
+    assert calls_to(aioclient_mock, DETAIL_URL) == []
+    assert rate_limit_warnings(caplog) == []
+
+    aioclient_mock.clear_requests()
+    mock_all_ok(aioclient_mock)
+    freezer.tick(61)
+    data = await coordinator._async_update_data()
+    assert len(calls_to(aioclient_mock, DETAIL_URL)) == 1
+    assert data["detail"] == {"demand": None}
 
 
 # Demand windows (#16)

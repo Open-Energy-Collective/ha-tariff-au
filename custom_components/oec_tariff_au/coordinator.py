@@ -115,6 +115,9 @@ class OecTariffCoordinator(DataUpdateCoordinator):
 
     async def _async_resolve_time_zone(self) -> None:
         """Set dnsp_time_zone from the API. Demand windows are stated on the DNSP's clock."""
+        # Another entry's 429 can start the shared backoff while this update is under way.
+        if (remaining := self._backoff_remaining()) > 0:
+            raise self._rate_limited(remaining)
         try:
             async with self._session.get(f"{self.api_url}/dnsps", timeout=10) as resp:
                 if resp.status == 429:
@@ -165,10 +168,13 @@ class OecTariffCoordinator(DataUpdateCoordinator):
         """Fetch the tariff detail when it is missing or 24 h old.
 
         A failed fetch keeps the previous detail, logs a warning and is retried on the
-        next update.
+        next update. During a rate-limit backoff the fetch is skipped silently and retried
+        on the next update.
         """
         now = dt_util.utcnow()
         if self._detail_fetched_at is not None and now - self._detail_fetched_at < DETAIL_REFRESH_AGE:
+            return
+        if self._backoff_remaining() > 0:
             return
         detail_url = f"{self.api_url}/tariffs/{self.dnsp}/{self.tariff}"
         try:

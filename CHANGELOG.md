@@ -2,7 +2,7 @@
 
 Versions follow SemVer. Entries start at 1.2.2; earlier releases are on the GitHub Releases page.
 
-## [Unreleased]
+## [1.3.0] - 2026-11-19
 
 ### Fixed
 - Seasonal demand tariffs follow their season. A tariff such as NASN12 no longer shows its summer rate all year, and its Demand Window is active in the right months.
@@ -10,6 +10,7 @@ Versions follow SemVer. Entries start at 1.2.2; earlier releases are on the GitH
 - Tariffs on standard time (Evoenergy 023) track the demand window at the right hour.
 - Tariffs with several demand charges measure each one with its own windows, method and rate. SAPN LBAD (peak and anytime) and Evoenergy 023 (peak and off-peak) are no longer reduced to one charge. Monthly Demand Charge is the sum over the charges.
 - Demand Surcharge sums, over the charges with a recorded peak and window hours this month, each charge's rate divided by that charge's exact window hours in the billing month, not the 5/7 and 2/7 estimate. It changes value after this update.
+- A 429 from the tariff service is honoured. The integration waits for the time its `Retry-After` gives, or 60 seconds when it gives none, before sending any request, and every entry on the same service address waits together. The 429 is logged once per wait.
 
 ### Changed
 - Requires tariff-service 0.10.0 or later. An older service gives no demand windows, so no demand is measured and Demand Window is unavailable. The integration logs a warning naming the minimum version.

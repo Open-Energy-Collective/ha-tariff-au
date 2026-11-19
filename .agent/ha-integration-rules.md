@@ -1,5 +1,11 @@
 # Home Assistant Integration Development Rules
 
+## Overrides
+
+| Org rule | Replaced here by |
+|---|---|
+| `branching-strategy.md#milestone-releases`: tag the merge commit `vX.Y.Z` | Tag `X.Y.Z` without `v`, continuing tags `1.0.1` to `1.2.4`: `governance/adr/cross-project.md#2026-11-17-ha-tariff-au-keeps-xyz-tags` |
+
 ## Naming Convention
 - Repo: `ha-{name}` (e.g., `ha-tariff-au`) — per `naming-standards.md`, the `ha-` prefix
   is required by HACS convention even though it looks like it violates the no-prefix rule
@@ -18,7 +24,10 @@ custom_components/{domain}/
 ├── coordinator.py        # DataUpdateCoordinator (API polling)
 ├── sensor.py             # Sensor entities
 ├── binary_sensor.py      # Binary sensor entities
-├── demand_tracker.py     # Business logic (separated from entities)
+├── demand_windows.py     # Pure functions over the cached per-charge windows
+├── window_cache.py       # Billing-month demand window cache (Store per entry)
+├── charge_tracker.py     # Per-charge peak accumulator (business logic, no hass)
+├── demand_manager.py     # Samples power, feeds one ChargeTracker per charge
 ├── demand_sensors.py     # Demand-specific sensor entities
 ├── strings.json          # UI strings for config flow
 └── brand/
@@ -29,7 +38,7 @@ custom_components/{domain}/
 
 ## Architecture Principles
 - **Coordinator pattern**: All API communication through DataUpdateCoordinator
-- **Separation of concerns**: Business logic (e.g., demand_tracker.py) separate from entity classes
+- **Separation of concerns**: Business logic (e.g., charge_tracker.py, demand_manager.py) separate from entity classes
 - **RestoreEntity**: Any stateful tracking must survive HA restarts
 - **No external dependencies**: Use HA's built-in aiohttp, don't add pip requirements unless essential
 - **Config flow only**: No YAML configuration — modern HA standard
@@ -59,7 +68,15 @@ custom_components/{domain}/
 tests/
 ├── __init__.py
 ├── conftest.py              # Shared fixtures (enable_custom_integrations)
-├── test_demand_tracker.py   # Pure logic: is_in_demand_window()
+├── fixtures.py              # Seed demand_charges, the demand-windows body generator, RECORDED
+├── recorded/                # Live tariff-service demand-windows bodies, verbatim
+├── test_fixtures.py         # The generator reproduces the recorded live windows
+├── test_demand_windows.py   # Pure logic: in_windows(), next_transition(), window_hours()
+├── test_window_cache.py     # Window cache: Store, refresh triggers, 404 retry, no cover
+├── test_charge_tracker.py   # Per-charge blocks, methods, rolling 12 months
+├── test_demand_manager.py   # Sample routing, billing reset, 1.2.x and v2 restore
+├── test_demand_sensors.py   # Demand sensor values and attributes over the manager
+├── test_demand_window_status_sensor.py  # Demand Window transitions from cached bounds
 ├── test_binary_sensor.py    # Binary sensor logic: transitions, _status_at()
 ├── test_config_flow.py      # Config flow steps (TODO)
 ├── test_sensor.py           # Sensor value mapping (TODO)
@@ -67,13 +84,16 @@ tests/
 ```
 
 ### Test Principles
-- **Pure logic tests**: Test functions like `is_in_demand_window()` directly — no mocking needed
+- **Pure logic tests**: Test functions like `in_windows()` directly, with no mocking
 - **Sensor tests**: Use fake coordinator/entry classes to test sensor properties without HA runtime
 - **Config flow tests**: Use `pytest-homeassistant-custom-component` fixtures for full integration tests
 - **Edge cases**: Always test boundary conditions (window start inclusive, end exclusive, overnight spans, season boundaries)
 
 ### Coverage Targets
-- `demand_tracker.py` — window logic, billing day reset, measurement methods
+- `demand_windows.py`: window membership, transitions, window hours, billing month range
+- `window_cache.py`: refresh triggers, Store restore, 404 retry, no cover
+- `charge_tracker.py`: measurement methods, peak period, restore
+- `demand_manager.py`: sample routing, billing day reset, restore
 - `binary_sensor.py` — transition calculation, state at time, no-demand fallback
 - `config_flow.py` — each step, error handling, options flow
 - `sensor.py` — value mapping from coordinator data
@@ -85,14 +105,19 @@ tests/
 3. Don't commit broken tests "to fix later"
 
 ## Deployment to HA
-1. Develop in this repo's checkout
-2. Run tests: `.venv/bin/python -m pytest tests/ -v` — must all pass
-3. Rsync to `~/hass/Home_Assistant/custom_components/oec_tariff_au/`
-4. Force-add new files: `git add -f custom_components/oec_tariff_au/` (HA `.gitignore` has `*.*`)
-5. Commit and push HA repo
-6. Git pull on HA device, restart
-7. Delete and re-add integration when config structure changes
-8. Check HA logs for import errors after restart
+A release installs from its GitHub Release through HACS (the Marketplace from HA 2026.11).
+Before a release PR merges, its tip is installed on the HA instance by hand for the live check:
+
+1. `.venv/bin/python -m pytest tests/ -v`: all pass.
+2. On the HA instance, fetch the release branch:
+   `git clone --depth 1 --branch feat/X.Y.Z https://github.com/Open-Energy-Collective/ha-tariff-au.git`,
+   or its archive `https://github.com/Open-Energy-Collective/ha-tariff-au/archive/refs/heads/feat/X.Y.Z.tar.gz`.
+3. Copy `/config/custom_components/oec_tariff_au` to a backup outside `custom_components/`.
+4. Replace `/config/custom_components/oec_tariff_au` with the fetched `custom_components/oec_tariff_au`.
+5. `ha core restart`.
+6. Delete and re-add the integration when the config structure changes.
+7. Settings, System, Logs: no `oec_tariff_au` errors after the restart.
+8. After the Release is published, update through HACS and delete the backup.
 
 ## HACS Compatibility
 - Include `hacs.json` at repo root

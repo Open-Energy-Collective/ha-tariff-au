@@ -1,69 +1,35 @@
-"""Tests for the Demand Window Status enum sensor and its shared DemandWindowScheduler."""
+"""Tests for the Demand Window enum sensor over the cached per-charge windows."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
-from custom_components.oec_tariff_au.demand_tracker import DemandWindowScheduler
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+from custom_components.oec_tariff_au.coordinator import DemandWindowsUnavailable
 from custom_components.oec_tariff_au.sensor import OecDemandWindowStatusSensor
+from custom_components.oec_tariff_au.window_cache import DemandWindowCache
 
-AEST = timezone(timedelta(hours=10))
+from .fixtures import NASN12, windows_coordinator
 
-
-def dt(y, m, d, hh, mm, ss=0):
-    return datetime(y, m, d, hh, mm, ss, tzinfo=AEST)
-
-
-def make_scheduler(window_start, window_end, days="all", season_months=None):
-    scheduler = DemandWindowScheduler(hass=None, on_transition=lambda is_active: None)
-    scheduler._load_window_config(
-        {
-            "window_start": window_start,
-            "window_end": window_end,
-            "days": days,
-            "season_months": season_months,
-        }
-    )
-    return scheduler
-
-
-# --- Pure logic: transition search ------------------------------------------
-
-
-def test_finds_window_start_today():
-    scheduler = make_scheduler("16:00", "21:00")
-    transition = scheduler._find_next_transition(dt(2026, 7, 22, 15, 0))
-    assert transition == dt(2026, 7, 22, 16, 0)
-
-
-def test_finds_window_end_today():
-    scheduler = make_scheduler("16:00", "21:00")
-    transition = scheduler._find_next_transition(dt(2026, 7, 22, 18, 0))
-    assert transition == dt(2026, 7, 22, 21, 0)
-
-
-def test_status_at_matches_window_config():
-    scheduler = make_scheduler("16:00", "21:00")
-    assert scheduler.status_at(dt(2026, 7, 22, 17, 0)) is True
-    assert scheduler.status_at(dt(2026, 7, 22, 22, 0)) is False
-
-
-def test_no_demand_config_returns_false_from_load():
-    scheduler = DemandWindowScheduler(hass=None, on_transition=lambda is_active: None)
-    assert scheduler._load_window_config(None) is False
-
-
-# --- Enum mapping ------------------------------------------------------------
+MELBOURNE = ZoneInfo("Australia/Melbourne")
+ENTRY_ID = "test_entry"
+# Friday 15 January 2027: NASN12's summer peak runs 15:00 to 21:00 on weekdays.
+BEFORE_WINDOW = datetime(2027, 1, 15, 14, 0, tzinfo=MELBOURNE)
+WINDOW_START = datetime(2027, 1, 15, 15, 0, tzinfo=MELBOURNE)
+WINDOW_END = datetime(2027, 1, 15, 21, 0, tzinfo=MELBOURNE)
 
 
 class FakeCoordinator:
-    """Minimal stand-in for OecTariffCoordinator — only what the sensor reads."""
+    """Minimal stand-in for OecTariffCoordinator: only what the sensor reads."""
 
-    def __init__(self, tariff_detail):
+    def __init__(self):
         self.dnsp = "test_dnsp"
         self.tariff = "test_tariff"
-        self.tariff_detail = tariff_detail
+        self.tariff_detail = {"demand_charges": NASN12["demand_charges"]}
         self.data = None
-        self.dnsp_time_zone = ZoneInfo("Australia/Melbourne")
+        self.last_update_success = True
 
     def async_add_listener(self, update_callback, context=None):
         """CoordinatorEntity.async_added_to_hass() needs this to register."""
@@ -71,65 +37,133 @@ class FakeCoordinator:
 
 
 class FakeEntry:
-    entry_id = "test_entry"
+    entry_id = ENTRY_ID
 
 
-def test_options_are_active_inactive():
-    sensor = OecDemandWindowStatusSensor(FakeCoordinator({"demand": None}), FakeEntry())
+async def _cache(hass, now=None):
+    await hass.config.async_set_time_zone("Australia/Melbourne")
+    cache = DemandWindowCache(hass, windows_coordinator(NASN12), ENTRY_ID, 1)
+    if now is not None:
+        await cache.async_refresh(now)
+    return cache
+
+
+async def _added_sensor(hass, cache):
+    """The sensor added to hass, recording its value at each state write."""
+    sensor = OecDemandWindowStatusSensor(FakeCoordinator(), FakeEntry(), cache)
+    sensor.hass = hass
+    sensor.entity_id = "sensor.demand_window"
+    sensor.writes = []
+    sensor.availability = []
+    sensor.async_write_ha_state = lambda: (
+        sensor.writes.append((sensor.native_value, sensor.extra_state_attributes)),
+        sensor.availability.append(sensor.available),
+    )
+    await sensor.async_added_to_hass()
+    return sensor
+
+
+async def test_options_are_active_inactive(hass):
+    sensor = OecDemandWindowStatusSensor(FakeCoordinator(), FakeEntry(), await _cache(hass))
     assert sensor.options == ["active", "inactive"]
 
 
-def test_native_value_before_scheduler_starts_is_none():
-    sensor = OecDemandWindowStatusSensor(FakeCoordinator({"demand": None}), FakeEntry())
-    assert sensor.native_value is None
-
-
-def test_native_value_reflects_scheduler_status():
-    sensor = OecDemandWindowStatusSensor(FakeCoordinator({"demand": None}), FakeEntry())
-    sensor._scheduler = make_scheduler("16:00", "21:00")
-
-    sensor._scheduler.is_active = True
-    assert sensor.native_value == "active"
-
-    sensor._scheduler.is_active = False
-    assert sensor.native_value == "inactive"
-
-
-# --- Windows resolve in the DNSP's time zone (ha-tariff-au#13) ---------------
-
-MELBOURNE = ZoneInfo("Australia/Melbourne")
-BRISBANE = ZoneInfo("Australia/Brisbane")
-
-
-def make_melbourne_scheduler():
-    scheduler = DemandWindowScheduler(
-        hass=None, on_transition=lambda is_active: None, time_zone=MELBOURNE
-    )
-    scheduler._load_window_config(
-        {"window_start": "15:00", "window_end": "21:00", "days": "weekdays", "season_months": [12]}
-    )
-    return scheduler
-
-
-def test_status_follows_the_dnsp_clock():
-    scheduler = make_melbourne_scheduler()
-    assert scheduler.status_at(datetime(2026, 12, 9, 14, 30, tzinfo=BRISBANE)) is True
-    assert scheduler.status_at(datetime(2026, 12, 9, 20, 30, tzinfo=BRISBANE)) is False
-
-
-def test_next_transition_is_the_window_start_on_the_dnsp_clock():
-    scheduler = make_melbourne_scheduler()
-    found = scheduler._find_next_transition(datetime(2026, 12, 9, 12, 0, tzinfo=BRISBANE))
-    assert found == datetime(2026, 12, 9, 14, 0, tzinfo=BRISBANE)
-
-
-async def test_sensor_gives_the_scheduler_the_dnsp_time_zone(hass):
-    demand = {"window_start": "15:00", "window_end": "21:00", "days": "all", "season_months": None}
-    sensor = OecDemandWindowStatusSensor(FakeCoordinator({"demand": demand}), FakeEntry())
-    sensor.hass = hass
-
-    await sensor.async_added_to_hass()
+async def test_demand_window_schedules_from_cache_bounds(hass, freezer):
+    freezer.move_to(BEFORE_WINDOW)
+    cache = await _cache(hass, BEFORE_WINDOW)
+    sensor = await _added_sensor(hass, cache)
     try:
-        assert sensor._scheduler.time_zone == MELBOURNE
+        assert sensor.native_value == "inactive"
+        assert sensor.extra_state_attributes == {"active_charges": []}
+
+        freezer.move_to(WINDOW_START)
+        async_fire_time_changed(hass, WINDOW_START)
+        await hass.async_block_till_done()
+
+        assert sensor.writes[-1] == ("active", {"active_charges": ["peak"]})
+
+        freezer.move_to(WINDOW_END)
+        async_fire_time_changed(hass, WINDOW_END)
+        await hass.async_block_till_done()
+
+        assert sensor.writes[-1] == ("inactive", {"active_charges": []})
+    finally:
+        await sensor.async_will_remove_from_hass()
+
+
+async def test_demand_window_reschedules_on_cache_change(hass, freezer):
+    freezer.move_to(BEFORE_WINDOW)
+    cache = await _cache(hass)
+    sensor = await _added_sensor(hass, cache)
+    try:
+        assert sensor.native_value is None
+
+        await cache.async_refresh(BEFORE_WINDOW)
+        assert sensor.writes[-1][0] == "inactive"
+
+        freezer.move_to(WINDOW_START)
+        async_fire_time_changed(hass, WINDOW_START)
+        await hass.async_block_till_done()
+
+        assert sensor.writes[-1][0] == "active"
+    finally:
+        await sensor.async_will_remove_from_hass()
+
+
+async def test_demand_window_unavailable_without_cover(hass, freezer):
+    freezer.move_to(BEFORE_WINDOW)
+    sensor = await _added_sensor(hass, await _cache(hass))
+    try:
+        assert sensor.available is False
+        assert sensor.native_value is None
+        assert sensor.extra_state_attributes == {"active_charges": []}
+    finally:
+        await sensor.async_will_remove_from_hass()
+
+
+async def test_removal_cancels_the_pending_transition(hass, freezer):
+    freezer.move_to(BEFORE_WINDOW)
+    sensor = await _added_sensor(hass, await _cache(hass, BEFORE_WINDOW))
+    await sensor.async_will_remove_from_hass()
+    writes = len(sensor.writes)
+
+    freezer.move_to(WINDOW_START + timedelta(minutes=1))
+    async_fire_time_changed(hass, WINDOW_START + timedelta(minutes=1))
+    await hass.async_block_till_done()
+
+    assert len(sensor.writes) == writes
+
+
+async def test_demand_window_unavailable_when_cover_runs_out(hass, freezer):
+    """January is cached, February is not: the state goes unavailable at 1 February."""
+    late = datetime(2027, 1, 31, 22, 0, tzinfo=MELBOURNE)
+    month_end = datetime(2027, 2, 1, tzinfo=MELBOURNE)
+    january = windows_coordinator(NASN12)
+    fetch = january.async_fetch_demand_windows.side_effect
+
+    def january_only(start, end):
+        if start.month != 1:
+            raise DemandWindowsUnavailable("unavailable", 503)
+        return fetch(start, end)
+
+    coordinator = SimpleNamespace(
+        async_fetch_demand_windows=AsyncMock(side_effect=january_only),
+        dnsp_time_zone=MELBOURNE,
+    )
+    await hass.config.async_set_time_zone("Australia/Melbourne")
+    cache = DemandWindowCache(hass, coordinator, ENTRY_ID, 1)
+    freezer.move_to(late)
+    await cache.async_refresh(late)
+    sensor = await _added_sensor(hass, cache)
+    try:
+        assert sensor.available is True
+        assert sensor.native_value == "inactive"
+
+        freezer.move_to(month_end)
+        async_fire_time_changed(hass, month_end)
+        await hass.async_block_till_done()
+
+        assert sensor.availability[-1] is False
+        assert sensor.writes[-1] == (None, {"active_charges": []})
     finally:
         await sensor.async_will_remove_from_hass()

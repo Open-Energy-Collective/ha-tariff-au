@@ -58,11 +58,11 @@ Entity IDs follow the pattern `sensor.tariff_{dnsp}_{tariff}_{name}`. For exampl
 | Entity | Unit | Description |
 |--------|------|-------------|
 | `sensor.tariff_energex_3900_current_rate` | $/kWh | Active energy rate now |
-| `sensor.tariff_energex_3900_current_period` | — | peak, off_peak, shoulder, solar_soak |
+| `sensor.tariff_energex_3900_current_period` | - | peak, off_peak, shoulder, solar_soak |
 | `sensor.tariff_energex_3900_daily_supply_charge` | $/day | Fixed daily network charge |
 | `sensor.tariff_energex_3900_demand_rate` | $/kW/month | Highest rate among the demand charges in season now |
-| `sensor.tariff_energex_3900_tariff_name` | — | Human-readable tariff name |
-| `sensor.tariff_energex_3900_demand_window` | — | Whether demand is being measured: `active`, `inactive` |
+| `sensor.tariff_energex_3900_tariff_name` | - | Human-readable tariff name |
+| `sensor.tariff_energex_3900_demand_window` | - | Whether demand is being measured: `active`, `inactive` |
 
 ### Demand Tracking Sensors (if power entity configured)
 

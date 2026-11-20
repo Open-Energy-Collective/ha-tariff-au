@@ -49,6 +49,37 @@ def parse_retry_after(value: str | None, now: datetime) -> float | None:
     return max(0.0, (when - now).total_seconds())
 
 
+def backoff_remaining(hass: HomeAssistant, api_url: str) -> float:
+    """Seconds left of the rate-limit backoff shared by every client of api_url, 0 when none."""
+    shared: dict[str, datetime] = hass.data.setdefault(BACKOFF_UNTIL, {})
+    key = api_url.rstrip("/")
+    until = shared.get(key)
+    if until is None:
+        return 0.0
+    remaining = (until - dt_util.utcnow()).total_seconds()
+    if remaining <= 0:
+        del shared[key]
+        return 0.0
+    return remaining
+
+
+def start_backoff(hass: HomeAssistant, api_url: str, resp, context: str) -> float:
+    """Record the shared backoff a 429 asks for and log it. Returns its length in seconds."""
+    now = dt_util.utcnow()
+    seconds = parse_retry_after(resp.headers.get("Retry-After"), now)
+    if seconds is None:
+        seconds = DEFAULT_RETRY_AFTER
+    key = api_url.rstrip("/")
+    hass.data.setdefault(BACKOFF_UNTIL, {})[key] = now + timedelta(seconds=seconds)
+    _LOGGER.warning(
+        "tariff-service at %s returned 429 (%s), no requests from any entry for %d s",
+        key,
+        context,
+        math.ceil(seconds),
+    )
+    return seconds
+
+
 class DemandWindowsUnavailable(Exception):
     """Demand windows could not be fetched. status is None for backoff and network errors."""
 
@@ -69,8 +100,6 @@ class OecTariffCoordinator(DataUpdateCoordinator):
         self.tariff_detail: dict | None = None
         self._detail_fetched_at: datetime | None = None
         self.dnsp_time_zone: tzinfo | None = None
-        self._backoff_key = self.api_url.rstrip("/")
-        self._backoff_until: dict[str, datetime] = hass.data.setdefault(BACKOFF_UNTIL, {})
 
         super().__init__(
             hass,
@@ -81,14 +110,7 @@ class OecTariffCoordinator(DataUpdateCoordinator):
 
     def _backoff_remaining(self) -> float:
         """Seconds left of this entry's rate-limit backoff, 0 when none is active."""
-        until = self._backoff_until.get(self._backoff_key)
-        if until is None:
-            return 0.0
-        remaining = (until - dt_util.utcnow()).total_seconds()
-        if remaining <= 0:
-            del self._backoff_until[self._backoff_key]
-            return 0.0
-        return remaining
+        return backoff_remaining(self.hass, self.api_url)
 
     def _rate_limited(self, remaining: float) -> UpdateFailed:
         # retry_after schedules the next refresh; +1 s covers the scheduler's sub-second rounding.
@@ -99,19 +121,7 @@ class OecTariffCoordinator(DataUpdateCoordinator):
 
     def _start_backoff(self, resp) -> float:
         """Record the backoff a 429 asks for and log it. Returns its length in seconds."""
-        now = dt_util.utcnow()
-        seconds = parse_retry_after(resp.headers.get("Retry-After"), now)
-        if seconds is None:
-            seconds = DEFAULT_RETRY_AFTER
-        self._backoff_until[self._backoff_key] = now + timedelta(seconds=seconds)
-        _LOGGER.warning(
-            "tariff-service at %s returned 429 (%s/%s), no requests from any entry for %d s",
-            self._backoff_key,
-            self.dnsp,
-            self.tariff,
-            math.ceil(seconds),
-        )
-        return seconds
+        return start_backoff(self.hass, self.api_url, resp, f"{self.dnsp}/{self.tariff}")
 
     async def _async_resolve_time_zone(self) -> None:
         """Set dnsp_time_zone from the API. Demand windows are stated on the DNSP's clock."""

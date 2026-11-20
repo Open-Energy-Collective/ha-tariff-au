@@ -237,16 +237,22 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
         self._attr_icon = "mdi:lightning-bolt"
 
     @property
-    def native_value(self) -> float:
+    def native_value(self) -> float | None:
         """Return the sum over charges with a peak of rate / that charge's window hours.
 
-        The window hours are the charge's cached windows in the billing month.
+        The window hours are the charge's cached windows in the billing month. While the
+        cached month is cut short (#26) its window hours are too few, so a charge with a
+        peak makes the value unknown rather than high.
         """
-        cached = self._manager.cache.charges(dt_util.now())
+        now = dt_util.now()
+        cached = self._manager.cache.charges(now)
+        partial = self._manager.cache.month_is_partial(now)
         total = 0.0
         for key, tracker in self._manager.trackers.items():
             if tracker.chargeable_demand <= 0 or key not in cached:
                 continue
+            if partial:
+                return None
             hours = window_hours(cached[key].windows)
             if hours > 0:
                 total += _rate(tracker) / hours
@@ -255,4 +261,7 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
     @property
     def extra_state_attributes(self) -> dict:
         """Return tracking metadata."""
-        return {"demand_recorded_at": self._demand_recorded_at_iso()}
+        return {
+            "demand_recorded_at": self._demand_recorded_at_iso(),
+            "partial_month": self._manager.cache.month_is_partial(dt_util.now()),
+        }

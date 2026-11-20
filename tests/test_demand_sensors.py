@@ -1,12 +1,13 @@
 """Tests for the demand sensors over a DemandManager: values, attributes and lifecycle."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import State
 from pytest_homeassistant_custom_component.common import mock_restore_cache_with_extra_data
 
+from custom_components.oec_tariff_au.coordinator import DemandWindowsUnavailable
 from custom_components.oec_tariff_au.demand_manager import DemandManager
 from custom_components.oec_tariff_au.demand_sensors import (
     OecDemandSurchargePerKwhSensor,
@@ -54,11 +55,11 @@ class FakeAddEntities:
         self.added.extend(entities)
 
 
-async def _manager(hass, tariff, now=None, coordinator=None, charges=None):
+async def _manager(hass, tariff, now=None, coordinator=None, charges=None, billing_day=1):
     """A manager on `tariff`; its cache is refreshed at `now` when one is given."""
     await hass.config.async_set_time_zone(tariff["timezone"])
     cache = DemandWindowCache(
-        hass, coordinator or windows_coordinator(tariff), ENTRY_ID, 1
+        hass, coordinator or windows_coordinator(tariff), ENTRY_ID, billing_day
     )
     if now is not None:
         await cache.async_refresh(now)
@@ -171,6 +172,84 @@ async def test_surcharge_is_zero_without_cover(hass):
     )
 
     assert sensor.native_value == 0.0
+
+
+def _unseeded_after_june(tariff):
+    """A coordinator that 404s any range past 1 July 2027, as before the next year is seeded."""
+    coordinator = windows_coordinator(tariff)
+    fetch = coordinator.async_fetch_demand_windows.side_effect
+    first_july = datetime(2027, 7, 1, tzinfo=MELBOURNE)
+
+    def unseeded(start, end):
+        if end > first_july:
+            raise DemandWindowsUnavailable("not found", 404)
+        return fetch(start, end)
+
+    coordinator.async_fetch_demand_windows.side_effect = unseeded
+    return coordinator
+
+
+async def test_surcharge_is_unknown_while_the_month_is_cut_at_an_unseeded_1_july(hass, freezer):
+    """#26: a month cached only to 1 July has too few window hours; no rate is divided by them."""
+    now = datetime(2027, 6, 20, 12, 0, tzinfo=MELBOURNE)
+    manager = await _manager(
+        hass, SURCHARGE_TARIFF, now, _unseeded_after_june(SURCHARGE_TARIFF), billing_day=15
+    )
+    _set_peak(manager, SURCHARGE_CHARGE, 3.0)
+    sensor = OecDemandSurchargePerKwhSensor(
+        FakeCoordinator([SURCHARGE_CHARGE]), FakeEntry(), manager
+    )
+
+    freezer.move_to(now)
+    assert manager.cache.covers(now)
+    assert sensor.native_value is None
+    assert sensor.extra_state_attributes["partial_month"] is True
+
+
+async def test_surcharge_is_exact_once_the_cut_month_is_fully_cached(hass, freezer):
+    now = datetime(2027, 6, 20, 12, 0, tzinfo=MELBOURNE)
+    coordinator = _unseeded_after_june(SURCHARGE_TARIFF)
+    manager = await _manager(hass, SURCHARGE_TARIFF, now, coordinator, billing_day=15)
+    _set_peak(manager, SURCHARGE_CHARGE, 3.0)
+    sensor = OecDemandSurchargePerKwhSensor(
+        FakeCoordinator([SURCHARGE_CHARGE]), FakeEntry(), manager
+    )
+    # The next year is seeded: the month holding `now` is refetched over its full range.
+    coordinator.async_fetch_demand_windows.side_effect = windows_coordinator(
+        SURCHARGE_TARIFF
+    ).async_fetch_demand_windows.side_effect
+    later = now + timedelta(days=1, minutes=1)
+    await manager.cache.async_refresh(later)
+
+    freezer.move_to(later)
+    assert sensor.native_value is not None and sensor.native_value > 0
+    assert sensor.extra_state_attributes["partial_month"] is False
+
+
+async def test_surcharge_is_zero_in_a_cut_month_with_no_peak(hass, freezer):
+    """No charge has a peak, so no rate is divided: 0 is exact whatever the window hours."""
+    now = datetime(2027, 6, 20, 12, 0, tzinfo=MELBOURNE)
+    manager = await _manager(
+        hass, SURCHARGE_TARIFF, now, _unseeded_after_june(SURCHARGE_TARIFF), billing_day=15
+    )
+    sensor = OecDemandSurchargePerKwhSensor(
+        FakeCoordinator([SURCHARGE_CHARGE]), FakeEntry(), manager
+    )
+
+    freezer.move_to(now)
+    assert sensor.native_value == 0.0
+    assert sensor.extra_state_attributes["partial_month"] is True
+
+
+async def test_surcharge_full_month_reports_partial_month_false(hass, freezer):
+    now = datetime(2027, 1, 10, 12, 0, tzinfo=MELBOURNE)
+    manager = await _manager(hass, SURCHARGE_TARIFF, now)
+    sensor = OecDemandSurchargePerKwhSensor(
+        FakeCoordinator([SURCHARGE_CHARGE]), FakeEntry(), manager
+    )
+
+    freezer.move_to(now)
+    assert sensor.extra_state_attributes["partial_month"] is False
 
 
 # --- Month Peak Demand ------------------------------------------------------

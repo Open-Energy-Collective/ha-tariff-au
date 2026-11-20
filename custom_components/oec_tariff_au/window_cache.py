@@ -154,6 +154,17 @@ class DemandWindowCache:
         month = self._month_holding(when)
         return month.charges if month is not None else {}
 
+    def month_is_partial(self, when: datetime) -> bool:
+        """Return True when the cached month holding `when` ends before its billing month does.
+
+        A billing month crossing an unseeded 1 July is cached only up to that 1 July.
+        """
+        month = self._month_holding(when)
+        if month is None:
+            return False
+        _, billing_end = billing_month_range(dt_util.as_local(when), self._billing_day)
+        return _utc(month.end) < _utc(billing_end)
+
     def month_end(self, when: datetime) -> datetime | None:
         """Return the end of the cached month holding `when`, None when none does."""
         month = self._month_holding(when)

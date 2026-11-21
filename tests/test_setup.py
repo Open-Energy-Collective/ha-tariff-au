@@ -380,3 +380,20 @@ async def test_1_2_x_restore_lands_on_the_charge_in_season(
     assert winter.month_peak_kw == 6.75
     assert summer.month_peak_kw == 0.0
     await _unload(hass, entry)
+
+
+async def test_malformed_saved_zone_takes_the_saved_path(
+    hass, hass_storage, aioclient_mock, freezer
+):
+    """A zone name zoneinfo rejects with ValueError counts as missing, not a setup error."""
+    _filled_store(hass_storage, time_zone="Australia/")
+    _all_answer(aioclient_mock)
+    entry = await _entry(hass, freezer)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert hass.data[DOMAIN][ENTRY_ID]["coordinator"].dnsp_time_zone == MELBOURNE
+    assert hass_storage[STORE_KEY]["data"]["dnsp_time_zone"] == "Australia/Melbourne"
+    await _unload(hass, entry)

@@ -30,7 +30,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if saved:
         zone = None
         if cache.saved_time_zone:
-            zone = await dt_util.async_get_time_zone(cache.saved_time_zone)
+            try:
+                zone = await dt_util.async_get_time_zone(cache.saved_time_zone)
+            except ValueError:
+                # A malformed key; the background update resolves the zone from /dnsps.
+                zone = None
         coordinator.seed(cache.saved_detail, zone)
     else:
         await coordinator.async_first_start()

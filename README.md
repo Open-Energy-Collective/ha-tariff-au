@@ -97,6 +97,8 @@ Charges that bill the highest of the last 12 months (`rolling_12_months`) use th
 
 Each demand tracking sensor carries a `demand_recorded_at` attribute: the ISO timestamp at which the current chargeable peak was recorded, or unset if nothing has been recorded this billing month.
 
+After the first successful start, the integration keeps the tariff detail and the distributor's time zone with its cached demand windows. A restart then starts from them without waiting on the tariff service, and fetches in the background. Current Rate, Current Period, Daily Supply Charge, Tariff Name and Demand Rate are unavailable until the tariff service answers. Month Peak Demand, Monthly Demand Charge and Demand Surcharge stay available, and keep measuring, while the tariff service is down; Demand Window stays available while the cached windows cover now. A first start with the tariff service down is retried by Home Assistant until it answers.
+
 ### Example Dashboard Card
 
 `dashboards/demand-card.yaml` is a ready-made Lovelace card showing the demand window, current peak and projected charge for one tariff. It needs the Mushroom and card-mod custom cards from the Marketplace (HACS before 2026.11); the file header lists the entity IDs to substitute.

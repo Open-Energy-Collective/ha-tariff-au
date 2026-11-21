@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -415,3 +415,100 @@ async def test_failed_current_month_is_retried_when_next_month_succeeds(hass, ha
     await cache.async_refresh(stale + timedelta(minutes=5))
     assert _ranges(coordinator)[-1] == (NOV_START, DEC_START)
     assert cache.fetched_at == stale + timedelta(minutes=5)
+
+
+DETAIL = {"code": "NASN12", "demand_charges": NASN12["demand_charges"]}
+
+
+def _saved(data: dict) -> dict:
+    return {"version": 1, "minor_version": 1, "key": STORE_KEY, "data": data}
+
+
+async def test_load_reads_saved_detail_and_time_zone(hass, hass_storage):
+    hass_storage[STORE_KEY] = _saved(
+        {"fetched_at": None, "months": [], "detail": DETAIL, "dnsp_time_zone": "Australia/Melbourne"}
+    )
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+
+    await cache.async_load()
+
+    assert cache.saved_detail == DETAIL
+    assert cache.saved_time_zone == "Australia/Melbourne"
+
+
+async def test_load_of_a_1_3_0_store_has_no_saved_detail(hass, hass_storage):
+    await DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1).async_refresh(NOW)
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+
+    await cache.async_load()
+
+    assert cache.covers(NOW)
+    assert cache.saved_detail is None
+    assert cache.saved_time_zone is None
+
+
+async def test_load_ignores_a_detail_that_is_not_a_dict(hass, hass_storage):
+    hass_storage[STORE_KEY] = _saved(
+        {"fetched_at": None, "months": [], "detail": "oops", "dnsp_time_zone": 7}
+    )
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+
+    await cache.async_load()
+
+    assert cache.saved_detail is None
+    assert cache.saved_time_zone is None
+
+
+async def test_save_service_data_writes_both_keys_and_keeps_months(hass, hass_storage):
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+    await cache.async_refresh(NOW)
+    months = hass_storage[STORE_KEY]["data"]["months"]
+
+    await cache.async_save_service_data(DETAIL, "Australia/Melbourne")
+
+    data = hass_storage[STORE_KEY]["data"]
+    assert data["detail"] == DETAIL
+    assert data["dnsp_time_zone"] == "Australia/Melbourne"
+    assert data["months"] == months
+    assert hass_storage[STORE_KEY]["version"] == 1
+    assert cache.saved_detail == DETAIL
+    assert cache.saved_time_zone == "Australia/Melbourne"
+
+
+async def test_save_service_data_unchanged_does_not_save(hass, hass_storage):
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+    await cache.async_save_service_data(DETAIL, "Australia/Melbourne")
+
+    with patch.object(cache._store, "async_save", wraps=cache._store.async_save) as save:
+        await cache.async_save_service_data(dict(DETAIL), "Australia/Melbourne")
+
+    save.assert_not_called()
+
+
+async def test_months_refresh_keeps_saved_detail(hass, hass_storage):
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+    await cache.async_save_service_data(DETAIL, "Australia/Melbourne")
+
+    await cache.async_refresh(NOW)
+
+    data = hass_storage[STORE_KEY]["data"]
+    assert len(data["months"]) == 1
+    assert data["detail"] == DETAIL
+    assert data["dnsp_time_zone"] == "Australia/Melbourne"
+
+
+async def test_billing_day_change_drops_months_keeps_detail(hass, hass_storage):
+    old = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 15)
+    await old.async_refresh(NOW)
+    await old.async_save_service_data(DETAIL, "Australia/Melbourne")
+    cache = DemandWindowCache(hass, _coordinator(), ENTRY_ID, 1)
+
+    await cache.async_load()
+
+    assert not cache.covers(NOW)
+    assert cache.saved_detail == DETAIL
+    await cache.async_refresh(NOW + timedelta(hours=1))
+    data = hass_storage[STORE_KEY]["data"]
+    assert [m["start"] for m in data["months"]] == [NOV_START.isoformat()]
+    assert data["detail"] == DETAIL
+    assert data["dnsp_time_zone"] == "Australia/Melbourne"

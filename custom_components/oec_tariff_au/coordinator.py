@@ -7,6 +7,7 @@ from email.utils import parsedate_to_datetime
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -104,9 +105,35 @@ class OecTariffCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=f"OEC Tariff ({self.dnsp}/{self.tariff})",
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
+
+    def seed(self, detail: dict, time_zone: tzinfo | None) -> None:
+        """Start from a saved tariff detail and DNSP time zone.
+
+        The detail counts as never fetched, so the first update refetches it.
+        """
+        self.tariff_detail = detail
+        self.dnsp_time_zone = time_zone
+        self._detail_fetched_at = None
+
+    async def async_first_start(self) -> None:
+        """First refresh of an entry with nothing saved; ConfigEntryNotReady on any failure.
+
+        A failed rate or time zone request, a 429 or an active backoff fails the refresh;
+        a detail still missing after it fails the start too, so HA retries setup.
+        """
+        await self.async_config_entry_first_refresh()
+        if self.tariff_detail is None:
+            raise ConfigEntryNotReady("Tariff detail not fetched")
+
+    def time_zone_name(self) -> str | None:
+        """The IANA name of dnsp_time_zone, None when it is unset."""
+        if self.dnsp_time_zone is None:
+            return None
+        return getattr(self.dnsp_time_zone, "key", None) or str(self.dnsp_time_zone)
 
     def _backoff_remaining(self) -> float:
         """Seconds left of this entry's rate-limit backoff, 0 when none is active."""

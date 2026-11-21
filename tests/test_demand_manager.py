@@ -466,3 +466,24 @@ async def test_hass_stop_flushes_every_tracker(hass, caplog):
         assert tracker.current_block_samples == []
     manager.stop()
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def test_listener_called_when_a_block_changes_a_peak(hass):
+    sydney = ZoneInfo("Australia/Sydney")
+    now = datetime(2027, 1, 15, 19, 0, tzinfo=sydney)
+    manager, _, _ = await _setup(hass, EVO_023, now)
+    calls = []
+    remove = manager.add_listener(lambda: calls.append(1))
+    _power(hass, 4.2)
+
+    manager._async_sample(now)
+    assert calls == []
+
+    manager._async_sample(now + timedelta(minutes=31))
+    assert calls == [1]
+
+    remove()
+    _power(hass, 9.0)
+    manager._async_sample(now + timedelta(minutes=35))
+    manager._async_sample(now + timedelta(minutes=61))
+    assert calls == [1]

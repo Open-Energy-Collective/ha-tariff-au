@@ -79,6 +79,14 @@ class OecBaseSensor(CoordinatorEntity, SensorEntity):
             "model": "Network Tariff",
         }
 
+    @property
+    def available(self) -> bool:
+        """Return False until tariff-service has answered since this start.
+
+        last_update_success starts True, so data is checked too.
+        """
+        return super().available and self.coordinator.data is not None
+
 
 class OecCurrentRateSensor(OecBaseSensor):
     """Current energy rate sensor."""
@@ -270,8 +278,8 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
 
     @property
     def available(self) -> bool:
-        """Return False while no cached windows cover now."""
-        return super().available and self._cache.covers(dt_util.now())
+        """Return False while no cached windows cover now, whatever tariff-service's state."""
+        return self._cache.covers(dt_util.now())
 
     @property
     def native_value(self) -> str | None:

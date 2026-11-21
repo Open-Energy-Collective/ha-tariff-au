@@ -107,6 +107,19 @@ class OecDemandBaseSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
             "model": "Network Tariff",
         }
 
+    @property
+    def available(self) -> bool:
+        """Always True: demand is measured from the cached windows, not tariff-service."""
+        return True
+
+    async def async_added_to_hass(self) -> None:
+        """Write the state whenever the manager's peaks change, not only on coordinator updates.
+
+        A coordinator does not notify entities of a failed update that follows a failed one.
+        """
+        await super().async_added_to_hass()
+        self.async_on_remove(self._manager.add_listener(self.async_write_ha_state))
+
     def _peak_tracker(self) -> ChargeTracker | None:
         """The tracker with the highest chargeable peak, the first one on a tie."""
         trackers = list(self._manager.trackers.values())

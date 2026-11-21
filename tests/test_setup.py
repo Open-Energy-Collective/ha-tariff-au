@@ -187,7 +187,6 @@ async def _sample_5_kw_through_a_block(hass, freezer) -> None:
         await hass.async_block_till_done()
 
 
-@pytest.mark.xfail(strict=True, reason="Task 4: demand sensors no longer follow the coordinator")
 async def test_restart_in_an_outage_demand_sensors_available(
     hass, hass_storage, aioclient_mock, freezer
 ):
@@ -285,6 +284,25 @@ async def test_first_good_update_rewrites_the_store_and_rates_turn_available(
     assert hass_storage[STORE_KEY]["data"]["detail"] == changed
     assert hass_storage[STORE_KEY]["data"]["months"] == [JANUARY]
     assert _state(hass, "current_rate") == "0.1343"
+    await _unload(hass, entry)
+
+
+async def test_outage_after_a_good_start(hass, hass_storage, aioclient_mock, freezer):
+    _all_answer(aioclient_mock)
+    entry = await _entry(hass, freezer)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert _state(hass, "current_rate") == "0.1343"
+
+    aioclient_mock.clear_requests()
+    _all_fail(aioclient_mock)
+    await hass.data[DOMAIN][ENTRY_ID]["coordinator"].async_refresh()
+    await hass.async_block_till_done()
+
+    for key in (*MEASURED_KEYS, "demand_window"):
+        assert _state(hass, key) != "unavailable", key
+    for key in RATE_KEYS:
+        assert _state(hass, key) == "unavailable", key
     await _unload(hass, entry)
 
 

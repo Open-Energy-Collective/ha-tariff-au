@@ -4,7 +4,7 @@ Intended design, for human readers. The specs cited below govern.
 
 Drawn from: [functional design §1](../../spec/oec_tariff_au/functional-design.md#1-overview), [§2](../../spec/oec_tariff_au/functional-design.md#2-data-model), [§3](../../spec/oec_tariff_au/functional-design.md#3-business-rules), [§4](../../spec/oec_tariff_au/functional-design.md#4-api-specification)
 
-Checked against `feat/1.4.0` `45c7253` on 2026-11-23.
+Checked against `feat/1.4.0` `50dd5a4` on 2026-11-23.
 
 ## 1. The integration reads tariff-service and one power entity, and serves sensors
 
@@ -61,7 +61,10 @@ flowchart TD
   C -->|yes| W{"per charge:<br/>in its window?"}
   W -->|no| FL["Flush that charge's block"]
   W -->|yes| B["Add to the 30 min block,<br/>or the peak for monthly_peak"]
-  B --> N["Notify demand sensors<br/>when a peak changed"]
+  RS --> N["Notify demand sensors when a peak<br/>or the last reset changed"]
+  F --> N
+  FL --> N
+  B --> N
 ```
 
 ## 4. Availability follows each entity's own source

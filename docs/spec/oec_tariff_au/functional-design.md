@@ -15,7 +15,8 @@ tariff).
 - **Writes.** Sensor states, the entry's Store, and RestoreEntity extra data on the Month
   Peak Demand sensor.
 - **Independence.** No pip requirements; HA's aiohttp session only. Business logic
-  (`demand_windows.py`, `charge_tracker.py`) imports no `hass`.
+  (`demand_windows.py`, `charge_tracker.py`) imports nothing from `homeassistant`; no test
+  enforces this.
 
 ## 2. Data Model
 
@@ -25,7 +26,7 @@ tariff).
 |---|---|---|
 | `dnsp` | str | DNSP code, as tariff-service lists it |
 | `tariff` | str | tariff code within the DNSP |
-| `api_url` | str | tariff-service base URL; default above |
+| `api_url` | str | tariff-service base URL. The config flow writes the default and its own requests always use it |
 | `power_entity` | str, optional | entity id of a `power` sensor in W or kW; demand is measured only when set |
 | `billing_day` | int 1 to 28 | day the billing month starts; default 1 |
 
@@ -38,15 +39,23 @@ tariff).
 | `detail` | object, optional | the last tariff detail (`/tariffs/<dnsp>/<tariff>`) |
 | `dnsp_time_zone` | str, optional | the DNSP's IANA time zone |
 
-`detail` and `dnsp_time_zone` are written only when held, so a Store without them reads as
-one with neither saved. The Store is deleted when the entry is deleted.
+`detail` and `dnsp_time_zone` are written only when held. On load:
+- a `detail` that is not an object, or a `dnsp_time_zone` that is not a non-empty string,
+  counts as not saved; a Store without a `detail` leads to a first start (rule 3.2);
+- a month whose `body` has no `charges` key is skipped;
+- a month that does not start on the current billing day is dropped, and the next refresh
+  saves the Store without it.
+
+The Store is deleted when the entry is deleted.
 
 ### Month Peak Demand restore data (state version 2)
 
 `{version: 2, last_reset, trackers: [{period, months, charge, state}]}`, where `state` holds
 `month_peak_kw`, `month_peak_recorded_at`, `previous_month_peak_kw`, `monthly_peaks_12`
-(list of `[kW, ISO time or null]`, at most 12), `last_reset` and `rate`. A blob without
-`version` is a single-tracker blob and restores onto one charge (rule 3.12).
+(list of `[kW, ISO time or null]`, or plain kW numbers, at most 12), `last_reset` and
+`rate`. A saved `rate` applies only to a key the tariff no longer lists; a listed key takes
+the cached or detail rate. A blob without `version` is a single-tracker blob and restores
+onto one charge (rule 3.12).
 
 ## 3. Business Rules
 
@@ -70,24 +79,36 @@ name are saved to the Store when both are known and either changed.
 The DNSP time zone is fetched from `/dnsps` when not yet known. The tariff detail is fetched
 when missing or 24 h old; a failed detail fetch keeps the previous detail and is retried on
 the next update. A seeded detail counts as never fetched, so the first update refetches it.
+A failed `/dnsps` request fails the whole update, even after a good rate.
 
 3.5 **Shared backoff.** A 429 from tariff-service starts a backoff, keyed by the API base URL
 and shared by every entry and the config flow on the instance. Its length is the
 `Retry-After` header (seconds or HTTP date), else 60 s. No request goes to that URL until it
-ends; the config flow shows `rate_limited`.
+ends. During it, or on the 429 itself:
+
+| Request | Outcome |
+|---|---|
+| rate, `/dnsps` | the update fails; after setup, the next update runs at the backoff end plus 1 s |
+| tariff detail (coordinator) | skipped; the previous detail is kept |
+| demand-windows range | skipped; that range is not fetched this refresh |
+| config flow DNSP and tariff lists | the form shows `rate_limited` |
+| config flow demand check | fails open: the demand step is shown |
+
 Check: `Retry-After: 120` at 10:00:00 gives no request before 10:02:00.
 
 ### Demand windows
 
 3.6 **Billing month.** The billing month holding `now` is `[start, end)`, where `start` is
-local midnight on `billing_day` on or before `now` and `end` is the same day a month later.
+midnight in HA's configured time zone on `billing_day` on or before `now` and `end` is the same day a month later.
 Check: billing day 15, now 2026-11-10 12:00 gives `[2026-10-15 00:00, 2026-11-15 00:00)`.
 
 3.7 **Cache refresh.** A refresh fetches the billing month holding now when it is 24 h old
 or does not cover now, and the month holding `now + 24 h` when that instant is uncovered.
 One refresh runs at a time. Months that ended, or that start off the current billing day,
-are dropped. A refresh runs at setup, after each coordinator update, and at each billing
-reset.
+are dropped. A refresh runs at setup, at each billing reset, and on each coordinator
+update that HA notifies. HA does not notify a failed update that follows a failed update,
+so through a sustained rate outage the windows are refreshed, and the detail saved, only
+at the billing reset.
 
 3.8 **1 July cut.** A 404 for a range crossing 1 July (DNSP clock) is retried once ending at
 that 1 July, provided it is still ahead. The cached month is then partial. A partial month
@@ -116,7 +137,7 @@ A window is half-open, `start <= t < end`, compared as UTC instants.
 Check: `4500` with unit `W` is sampled as `4.5` kW.
 
 3.12 **Trackers.** Each charge key has one tracker. An out-of-window reading flushes a
-pending block and is dropped. Blocks are clock-aligned 30 min (`:00`, `:30`). Per
+pending block and is dropped. Blocks are 30 min, aligned on `:00` and `:30` in HA's configured time zone. Per
 `measurement_method` (default `30min_avg`):
 
 | Method | Block value | Month peak |
@@ -128,17 +149,18 @@ pending block and is dropped. Blocks are clock-aligned 30 min (`:00`, `:30`). Pe
 Peaks are rounded to 3 decimals. `peak_period: rolling_12_months` makes the chargeable
 demand the highest of this month's peak and the last 12 closed months; otherwise it is this
 month's peak. A single-tracker restore blob goes to the first detail charge the cache lists
-now, else the first detail charge.
+now, else the first detail charge; it is dropped when no detail charge has a tracker.
 Check: readings 4.0 and 6.0 kW in one block give 5.0 (`30min_avg`) or 6.0 (`30min_max`).
 
-3.13 **Billing reset.** At the first sample on or after local midnight of `billing_day`, each
+3.13 **Billing reset.** At the first sample on or after midnight of `billing_day` in HA's configured time zone, each
 tracker flushes, records its peak as the previous month's and in its 12-month history, and
 starts at 0. On a first sample with no restored `last_reset`, this closes a 0 kW month into
 the history. A key neither the cached month nor the latest detail lists is removed, unless
 there is no cover or no detail listing charges, when none is removed. A restored key the
 tariff no longer lists bills at its saved rate until then.
 
-3.14 **Stop.** On HA stop, every pending block is flushed before RestoreEntity saves state.
+3.14 **Stop and unload.** On HA stop, every pending block is flushed before RestoreEntity
+saves state. On unload, the manager flushes and stops before the platforms unload.
 
 3.15 **kVA charges.** A charge with `unit: kVA` is measured from the kW power entity, as a
 stand-in, and marked `measured_as: kW`.
@@ -152,23 +174,27 @@ among the charges in season now, `0.0` when none is.
 
 3.17 **Demand Window** exists when the detail at setup lists demand charges. It is `active` while any cached charge's window holds now, else
 `inactive`, with `active_charges` listing the periods. It is unavailable while no cached
-month covers now, whatever tariff-service's state. It writes its state at each window bound
-and at the end of the cached month.
+month covers now, whatever tariff-service's state. It writes its state at every bound of
+any charge's window, so `active_charges` follows overlapping charges, and at the end of the
+cached month.
 
-3.18 **Demand sensors** (Month Peak Demand, Monthly Demand Charge, Demand Surcharge) are
-always available and write their state whenever a sample changes a peak or resets the
-month, through a tariff-service outage too.
+3.18 **Demand sensors** (Month Peak Demand, Monthly Demand Charge, Demand Surcharge) exist
+when a power entity is configured and the detail at setup lists demand charges. They are
+always available. They write their state on each coordinator update HA notifies, and
+whenever a sample changes a peak, the set of trackers or the last reset, through a
+tariff-service outage too.
 - Month Peak Demand is the highest chargeable demand across the charges, in kW.
 - Monthly Demand Charge is the sum over charges of chargeable demand times rate, rounded to
   cents. Check: 5.0 kW at 10 $/kW plus 2.0 kW at 5 $/kW gives `60.00`.
-- Demand Surcharge is the sum, over charges with a peak and cached windows, of rate divided
-  by that charge's window hours in the cached month. While the month holding now is partial
+- Demand Surcharge is the sum, over charges with a chargeable demand above 0 and cached
+  windows, of rate divided by that charge's window hours in the cached month, rounded to 5
+  decimals. While the month holding now is partial
   (`partial_month: true`) it is unknown when any such charge exists, and `0.0` when none
   does. Check: 10 $/kW over 100 window hours gives `0.1`.
 
 3.19 **Entity set.** The entity set is fixed at setup from the detail then held: a tariff
-that gains demand charges creates their entities at the next reload. A billing day change
-reloads the entry.
+that gains demand charges creates their entities at the next reload. Any options change
+(power entity or billing day) writes the entry data and reloads the entry.
 
 ## 4. API Specification
 
@@ -189,7 +215,8 @@ Every request has a 10 s timeout and honours the shared backoff (rule 3.5).
 One device per entry, `Tariff (<dnsp>/<tariff>)`, holding the sensors of rules 3.16 to 3.18.
 The config flow has three steps: DNSP, tariff, and the optional power entity and billing
 day. The third is skipped when the tariff detail lists no demand charges, and shown when
-that check fails. The options flow changes the power entity and billing day.
+that check fails. The options flow changes the power entity and billing day in the entry data, which reloads
+the entry (rule 3.19).
 
 ## 5. Non-Functional Notes
 
@@ -216,13 +243,21 @@ custom_components/oec_tariff_au/
 ├── charge_tracker.py   pure: one charge's blocks and peaks
 ├── demand_manager.py   30 s sampling, billing reset, restore
 ├── sensor.py           tariff sensors, Demand Window
-└── demand_sensors.py   demand sensors
+├── demand_sensors.py   demand sensors
+├── manifest.json       integration metadata and version
+├── strings.json        config flow and entity strings
+├── translations/       translated strings
+└── brand/              icons and logo
 ```
 
-`demand_windows.py` and `charge_tracker.py` import nothing from `homeassistant`.
+`demand_windows.py` and `charge_tracker.py` import nothing from `homeassistant`; no test
+enforces it.
 
 ## 7. Contract changes
 
-None. This document states the integration as built; the Store layout above (version 1,
-optional `detail` and `dnsp_time_zone`) and the restore data (state version 2) are the
-current formats.
+- **Store, version 1:** gains the optional keys `detail` and `dnsp_time_zone`. Additive;
+  the version is unchanged. Carrier: the entry's Store. Consumer: setup (rule 3.1). A Store
+  without them, as 1.3.0 writes it, leads to a first start (rule 3.2); 1.3.0 reads a Store
+  holding them and ignores them.
+- **Restore data, state version 2:** unchanged.
+- **tariff-service API:** unchanged; needs 0.10.0 or later.

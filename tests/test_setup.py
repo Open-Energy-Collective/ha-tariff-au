@@ -261,7 +261,8 @@ async def test_unknown_saved_zone_takes_the_saved_path(
     entry = await _entry(hass, freezer)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    # The saved path updates in a background task, which async_block_till_done skips.
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert entry.state is ConfigEntryState.LOADED
     assert all(_ids(hass, DEMAND_KEYS).values())
@@ -371,6 +372,13 @@ async def test_1_2_x_restore_lands_on_the_charge_in_season(
         ],
     )
     entry = await _entry(hass, freezer, now=datetime(2027, 7, 10, 12, 0, tzinfo=MELBOURNE))
+    # Fix the entity id the restore cache names: HA versions derive it differently.
+    er.async_get(hass).async_get_or_create(
+        "sensor",
+        DOMAIN,
+        f"{ENTRY_ID}_month_peak_demand",
+        suggested_object_id="tariff_ausnet_nasn12_month_peak_demand",
+    )
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -391,7 +399,8 @@ async def test_malformed_saved_zone_takes_the_saved_path(
     entry = await _entry(hass, freezer)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    # The saved path updates in a background task, which async_block_till_done skips.
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert entry.state is ConfigEntryState.LOADED
     assert hass.data[DOMAIN][ENTRY_ID]["coordinator"].dnsp_time_zone == MELBOURNE

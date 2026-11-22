@@ -7,9 +7,9 @@ Versions follow SemVer. Entries start at 1.2.2; earlier releases are on the GitH
 ### Fixed
 - A restart while the tariff service is down no longer stops demand measurement. The integration starts from the tariff data it saved at its last start and measures demand from the cached windows while it waits for the service.
 - Month Peak Demand, Monthly Demand Charge and Demand Surcharge stay available, and keep updating, through a tariff service outage. Demand Window stays available while the cached windows cover now, whatever the service's state.
-- Setup no longer waits on the tariff service once the integration has started successfully before, so Home Assistant no longer waits about 40 seconds on it during startup near 1 July.
+- Setup no longer waits on the tariff service once 1.4.0 has started successfully once, so Home Assistant no longer waits about 40 seconds on it during startup near 1 July. The first start after upgrading from 1.3.0 still fetches before the sensors load.
 - A first start while the tariff service is down, or while its tariff detail fails, is retried by Home Assistant until the service answers. It no longer loads without demand entities until a reload.
-- Demand Surcharge is unknown, not high, while the billing month is cut short at 1 July because the next financial year's windows are not published yet. A new `partial_month` attribute is `true` while that holds.
+- Demand Surcharge is unknown, not high, while the billing month is cut short at 1 July because the next financial year's windows are not published yet, once any charge has a recorded peak; it stays `0.0` while none has. A new `partial_month` attribute is `true` while the month is cut short.
 - Adding the integration while the tariff service has asked for a pause (a 429) waits out the pause, and the form shows that the service is rate limited.
 - Demand Window's `active_charges` attribute changes at every window bound when charges overlap, instead of up to 5 minutes late.
 

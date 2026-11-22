@@ -36,6 +36,14 @@ custom_components/{domain}/
     └── logo.png          # Wide logo for detail view
 ```
 
+```
+docs/
+├── spec/oec_tariff_au/functional-design.md   # Current behaviour: rules, Store, API (governs)
+└── design/oec_tariff_au/oec_tariff_au.md     # Design view: diagrams drawn from the spec
+```
+
+Specs and plans for a change live in the org repo, not here (`CLAUDE.md` "Specs and Plans").
+
 ## Architecture Principles
 - **Coordinator pattern**: All API communication through DataUpdateCoordinator
 - **Separation of concerns**: Business logic (e.g., charge_tracker.py, demand_manager.py) separate from entity classes

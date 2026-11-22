@@ -104,7 +104,8 @@ A window is half-open, `start <= t < end`, compared as UTC instants.
 
 3.11 **Sampling.** Every 30 s, with a power entity configured and the tariff detail listing
 `demand_charges`, the manager:
-1. resets the billing month when its start has passed since `last_reset` (rule 3.13);
+1. resets the billing month when its start has passed since `last_reset`, or when there is
+   no `last_reset` (rule 3.13);
 2. aligns the trackers with the cached charges (a new key gets a tracker; an out-of-season
    key takes the detail's charge);
 3. reads the power entity: `unknown`, `unavailable` or a non-number is skipped; a `W` unit is
@@ -132,7 +133,8 @@ Check: readings 4.0 and 6.0 kW in one block give 5.0 (`30min_avg`) or 6.0 (`30mi
 
 3.13 **Billing reset.** At the first sample on or after local midnight of `billing_day`, each
 tracker flushes, records its peak as the previous month's and in its 12-month history, and
-starts at 0. A key neither the cached month nor the latest detail lists is removed, unless
+starts at 0. On a first sample with no restored `last_reset`, this closes a 0 kW month into
+the history. A key neither the cached month nor the latest detail lists is removed, unless
 there is no cover or no detail listing charges, when none is removed. A restored key the
 tariff no longer lists bills at its saved rate until then.
 
@@ -144,11 +146,11 @@ stand-in, and marked `measured_as: kW`.
 ### Entities and availability
 
 3.16 **Tariff sensors** (Current Rate, Current Period, Daily Supply Charge, Tariff Name, and,
-when the detail lists demand charges, Demand Rate) are unavailable until tariff-service has
+when the detail at setup lists demand charges, Demand Rate) are unavailable until tariff-service has
 answered since this start, and while the last update failed. Demand Rate is the highest rate
 among the charges in season now, `0.0` when none is.
 
-3.17 **Demand Window** is `active` while any cached charge's window holds now, else
+3.17 **Demand Window** exists when the detail at setup lists demand charges. It is `active` while any cached charge's window holds now, else
 `inactive`, with `active_charges` listing the periods. It is unavailable while no cached
 month covers now, whatever tariff-service's state. It writes its state at each window bound
 and at the end of the cached month.
@@ -160,8 +162,9 @@ month, through a tariff-service outage too.
 - Monthly Demand Charge is the sum over charges of chargeable demand times rate, rounded to
   cents. Check: 5.0 kW at 10 $/kW plus 2.0 kW at 5 $/kW gives `60.00`.
 - Demand Surcharge is the sum, over charges with a peak and cached windows, of rate divided
-  by that charge's window hours in the cached month. It is unknown while the month holding
-  now is partial (`partial_month: true`). Check: 10 $/kW over 100 window hours gives `0.1`.
+  by that charge's window hours in the cached month. While the month holding now is partial
+  (`partial_month: true`) it is unknown when any such charge exists, and `0.0` when none
+  does. Check: 10 $/kW over 100 window hours gives `0.1`.
 
 3.19 **Entity set.** The entity set is fixed at setup from the detail then held: a tariff
 that gains demand charges creates their entities at the next reload. A billing day change
@@ -185,15 +188,17 @@ Every request has a 10 s timeout and honours the shared backoff (rule 3.5).
 
 One device per entry, `Tariff (<dnsp>/<tariff>)`, holding the sensors of rules 3.16 to 3.18.
 The config flow has three steps: DNSP, tariff, and the optional power entity and billing
-day. The options flow changes the power entity and billing day.
+day. The third is skipped when the tariff detail lists no demand charges, and shown when
+that check fails. The options flow changes the power entity and billing day.
 
 ## 5. Non-Functional Notes
 
 - Requests per entry: one rate request per 5 min, one detail request per 24 h, and per windows refresh
   at most two ranges, each retried once on a 404. tariff-service rate-limits per remote IP, hence the
   shared backoff.
-- An entry with a saved detail starts with no network request; its sensors read from the
-  Store and restore data until tariff-service answers.
+- An entry with a saved detail loads its sensors before any network request. Demand Window
+  reads the Store and the demand sensors their restore data; the tariff sensors stay
+  unavailable until tariff-service answers.
 - Demand is measured through a tariff-service outage for as long as the cached months cover
   now (up to the end of the next billing month near a month end).
 - No new infrastructure.

@@ -4,17 +4,21 @@ Intended design, for human readers. The specs cited below govern.
 
 Drawn from: [functional design §1](../../spec/oec_tariff_au/functional-design.md#1-overview), [§2](../../spec/oec_tariff_au/functional-design.md#2-data-model), [§3](../../spec/oec_tariff_au/functional-design.md#3-business-rules), [§4](../../spec/oec_tariff_au/functional-design.md#4-api-specification)
 
-Checked against `feat/1.4.0` `50dd5a4` on 2026-11-23.
+Checked against `feat/1.4.0` `a727dfc` on 2026-11-23.
 
 ## 1. The integration reads tariff-service and one power entity, and serves sensors
 
-The coordinator is the only client of tariff-service. The window cache keeps what setup and
-demand measurement need in the entry's Store
+The coordinator and the config flow call tariff-service, and share one 429 backoff. The
+window cache keeps what setup and demand measurement need in the entry's Store
 ([§2](../../spec/oec_tariff_au/functional-design.md#2-data-model)).
 
 ```mermaid
 flowchart LR
-  TS["tariff-service"] -->|rate, detail, time zone, windows| CO["Coordinator<br/>(shared 429 backoff)"]
+  TS["tariff-service"] -->|rate, detail, time zone, windows| CO["Coordinator"]
+  TS -->|DNSPs, tariffs, detail| CF["Config flow"]
+  BO(["Shared 429 backoff"]) -.- CO
+  BO -.- CF
+  CF -->|entry data| CO
   CO -->|detail, time zone| WC["Window cache"]
   CO -->|windows| WC
   WC <-->|months, detail, time zone| ST[("Store<br/>per entry")]
@@ -50,7 +54,7 @@ One 30 s sample, end to end ([rules 3.11 to 3.13](../../spec/oec_tariff_au/funct
 
 ```mermaid
 flowchart TD
-  T["30 s tick"] --> R{"billing day passed<br/>since last reset?"}
+  T["30 s tick"] --> R{"billing day passed since<br/>last reset, or no last reset?"}
   R -->|yes| RS["Close the month on every tracker,<br/>drop unlisted charges, refresh windows"]
   R -->|no| SY
   RS --> SY["Align trackers with cached charges"]
@@ -61,7 +65,7 @@ flowchart TD
   C -->|yes| W{"per charge:<br/>in its window?"}
   W -->|no| FL["Flush that charge's block"]
   W -->|yes| B["Add to the 30 min block,<br/>or the peak for monthly_peak"]
-  RS --> N["Notify demand sensors when a peak<br/>or the last reset changed"]
+  E --> N["Notify demand sensors when a peak,<br/>the trackers or the last reset changed"]
   F --> N
   FL --> N
   B --> N

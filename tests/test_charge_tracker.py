@@ -213,3 +213,11 @@ def test_restore_defaults_when_empty():
     assert tracker.month_peak_recorded_at is None
     assert tracker.monthly_peaks_12 == []
     assert tracker.last_reset is None
+
+
+def test_block_peak_is_rounded_to_3_decimals():
+    tracker = make_tracker()
+    tracker.sample(dt(2027, 1, 15, 15, 0), 4.12345, True)
+    tracker.sample(dt(2027, 1, 15, 15, 1), 4.12345, True)
+    tracker.flush()
+    assert tracker.month_peak_kw == 4.123

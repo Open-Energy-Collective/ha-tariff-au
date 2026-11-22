@@ -512,3 +512,23 @@ async def test_billing_day_change_drops_months_keeps_detail(hass, hass_storage):
     assert [m["start"] for m in data["months"]] == [NOV_START.isoformat()]
     assert data["detail"] == DETAIL
     assert data["dnsp_time_zone"] == "Australia/Melbourne"
+
+
+async def test_old_service_warning_returns_after_a_body_with_charges(hass, hass_storage, caplog):
+    good = _body(NOV_START, DEC_START)
+    old = {k: v for k, v in good.items() if k != "charges"}
+    served = {"body": old}
+    cache = DemandWindowCache(hass, _coordinator(lambda s, e: served["body"]), ENTRY_ID, 1)
+
+    def warnings():
+        return [r for r in caplog.records if "0.10.0" in r.getMessage()]
+
+    with caplog.at_level(logging.WARNING):
+        await cache.async_refresh(NOW)
+        served["body"] = good
+        await cache.async_refresh(NOW + timedelta(minutes=5))
+        assert cache.covers(NOW)
+        served["body"] = old
+        await cache.async_refresh(NOW + timedelta(hours=25))
+
+    assert len(warnings()) == 2

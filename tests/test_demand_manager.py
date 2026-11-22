@@ -205,6 +205,8 @@ async def test_first_sample_without_last_reset_resets(hass):
     cache.async_refresh.assert_awaited_once_with(now)
     for charge in LBAD["demand_charges"]:
         assert _tracker(manager, charge).current_block_samples == [3.0]
+        # The reset closes an empty month into the 12-month history.
+        assert _tracker(manager, charge).monthly_peaks_12 == [(0.0, None)]
 
 
 async def test_mid_cycle_sample_does_not_reset(hass):

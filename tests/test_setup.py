@@ -397,3 +397,44 @@ async def test_malformed_saved_zone_takes_the_saved_path(
     assert hass.data[DOMAIN][ENTRY_ID]["coordinator"].dnsp_time_zone == MELBOURNE
     assert hass_storage[STORE_KEY]["data"]["dnsp_time_zone"] == "Australia/Melbourne"
     await _unload(hass, entry)
+
+
+async def test_billing_day_change_in_options_reloads_with_the_new_day(
+    hass, hass_storage, aioclient_mock, freezer
+):
+    _filled_store(hass_storage)
+    _all_answer(aioclient_mock)
+    entry = await _entry(hass, freezer)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        flow["flow_id"], {CONF_POWER_ENTITY: "sensor.power", CONF_BILLING_DAY: 15}
+    )
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data[CONF_BILLING_DAY] == 15
+    assert hass.data[DOMAIN][ENTRY_ID]["demand_manager"].billing_day == 15
+    await _unload(hass, entry)
+
+
+async def test_demand_charges_gained_after_setup_create_entities_at_the_reload(
+    hass, hass_storage, aioclient_mock, freezer
+):
+    _filled_store(hass_storage, detail={**DETAIL, "demand_charges": []})
+    _all_answer(aioclient_mock)
+    entry = await _entry(hass, freezer)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # The first update fetched a detail with demand charges; the entity set holds.
+    assert hass.data[DOMAIN][ENTRY_ID]["coordinator"].tariff_detail["demand_charges"]
+    assert _ids(hass, DEMAND_KEYS) == dict.fromkeys(DEMAND_KEYS)
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert all(_ids(hass, DEMAND_KEYS).values())
+    await _unload(hass, entry)

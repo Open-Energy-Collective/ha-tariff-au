@@ -77,6 +77,12 @@ def next_transition(windows: list[Window], now: datetime) -> datetime | None:
     return None
 
 
+def next_bound(windows: list[Window], now: datetime) -> datetime | None:
+    """Return the earliest window start or end after `now`, whether or not in_windows flips there."""
+    instant = _utc(now)
+    return min((b for w in windows for b in w if _utc(b) > instant), key=_utc, default=None)
+
+
 def window_hours(windows: list[Window]) -> float:
     """Return the total length of the windows in hours."""
     return sum((_utc(end) - _utc(start)).total_seconds() for start, end in windows) / 3600

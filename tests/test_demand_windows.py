@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from custom_components.oec_tariff_au.demand_windows import (
+    next_bound,
     billing_month_range,
     charge_key,
     in_windows,
@@ -165,3 +166,15 @@ def test_billing_month_range_year_rollover():
     start, end = billing_month_range(now, 15)
     assert start == datetime(2026, 12, 15, tzinfo=SYDNEY)
     assert end == datetime(2027, 1, 15, tzinfo=SYDNEY)
+
+
+def test_next_bound_is_any_bound_after_now():
+    tz = timezone(timedelta(hours=10))
+
+    def at(hour):
+        return datetime(2027, 1, 15, hour, tzinfo=tz)
+
+    windows = [(at(15), at(17)), (at(16), at(18))]
+    assert next_bound(windows, at(15)) == at(16)
+    assert next_bound(windows, at(16)) == at(17)
+    assert next_bound(windows, at(18)) is None

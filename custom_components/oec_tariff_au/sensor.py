@@ -18,7 +18,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 from .coordinator import OecTariffCoordinator
 from .demand_sensors import async_setup_demand_sensors
-from .demand_windows import in_windows, next_transition
+from .demand_windows import in_windows, next_bound
 from .window_cache import DemandWindowCache
 
 # The tariff detail's `demand_charges` fields listed in Demand Rate's `charges` attribute.
@@ -238,7 +238,9 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
 
     @callback
     def _schedule_transition(self) -> None:
-        """Schedule a state write at the next window bound or the end of the cached month.
+        """Schedule a state write at the next bound of any window, or the end of the cached month.
+
+        Any bound, not only where the state flips: `active_charges` changes at every bound.
 
         The month end is where cover runs out, or where the next cached month's windows
         take over.
@@ -246,7 +248,7 @@ class OecDemandWindowStatusSensor(OecBaseSensor):
         self._cancel_transition()
         now = dt_util.now()
         windows = [w for cached in self._cache.charges(now).values() for w in cached.windows]
-        candidates = [next_transition(windows, now), self._cache.month_end(now)]
+        candidates = [next_bound(windows, now), self._cache.month_end(now)]
         upcoming = [when for when in candidates if when is not None]
         if upcoming:
             self._unsub_transition = async_track_point_in_time(

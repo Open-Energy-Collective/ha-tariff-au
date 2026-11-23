@@ -307,3 +307,19 @@ async def test_failed_window_refresh_is_logged(hass, aioclient_mock, freezer, ca
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+
+
+def test_rate_sensor_unavailable_before_first_answer():
+    """last_update_success starts True; with no data yet the rate is not known."""
+    coordinator = FakeCoordinator()
+    coordinator.data = None
+    coordinator.last_update_success = True
+
+    assert OecCurrentRateSensor(coordinator, FakeEntry()).available is False
+
+
+def test_rate_sensor_available_with_an_answer():
+    coordinator = FakeCoordinator(rate={"rate": 0.35})
+    coordinator.last_update_success = True
+
+    assert OecCurrentRateSensor(coordinator, FakeEntry()).available is True

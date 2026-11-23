@@ -66,12 +66,23 @@ class DemandWindowCache:
         self.fetched_at: datetime | None = None
         self._month_attempted_at: datetime | None = None
         self._dropped_on_load = False
+        # The tariff detail and DNSP time zone last fetched, so setup can start without them.
+        self.saved_detail: dict | None = None
+        self.saved_time_zone: str | None = None
 
     async def async_load(self) -> None:
-        """Restore the cached months from the Store. Sends no request."""
+        """Restore the cached months, tariff detail and time zone from the Store.
+
+        Sends no request. A detail that is not a dict, or a zone that is not a non-empty
+        string, is treated as not saved.
+        """
         data = await self._store.async_load()
         if not data:
             return
+        detail = data.get("detail")
+        self.saved_detail = detail if isinstance(detail, dict) else None
+        zone = data.get("dnsp_time_zone")
+        self.saved_time_zone = zone if isinstance(zone, str) and zone else None
         fetched_at = data.get("fetched_at")
         self.fetched_at = datetime.fromisoformat(fetched_at) if fetched_at else None
         for saved in data.get("months", []):
@@ -86,6 +97,14 @@ class DemandWindowCache:
             self._months.append(
                 _Month(start, datetime.fromisoformat(saved["end"]), saved["body"], charges)
             )
+
+    async def async_save_service_data(self, detail: dict, time_zone: str) -> None:
+        """Hold and save the tariff detail and DNSP time zone; no save when both are unchanged."""
+        if detail == self.saved_detail and time_zone == self.saved_time_zone:
+            return
+        self.saved_detail = detail
+        self.saved_time_zone = time_zone
+        await self._store.async_save(self._serialise())
 
     @callback
     def schedule_refresh(self, now: datetime) -> None:
@@ -153,6 +172,17 @@ class DemandWindowCache:
         """Return the charges of the cached month holding `when`, {} when none does."""
         month = self._month_holding(when)
         return month.charges if month is not None else {}
+
+    def month_is_partial(self, when: datetime) -> bool:
+        """Return True when the cached month holding `when` ends before its billing month does.
+
+        A billing month crossing an unseeded 1 July is cached only up to that 1 July.
+        """
+        month = self._month_holding(when)
+        if month is None:
+            return False
+        _, billing_end = billing_month_range(dt_util.as_local(when), self._billing_day)
+        return _utc(month.end) < _utc(billing_end)
 
     def month_end(self, when: datetime) -> datetime | None:
         """Return the end of the cached month holding `when`, None when none does."""
@@ -247,10 +277,16 @@ class DemandWindowCache:
             self._outage = True
 
     def _serialise(self) -> dict:
-        return {
+        data = {
             "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None,
             "months": [
                 {"start": m.start.isoformat(), "end": m.end.isoformat(), "body": m.body}
                 for m in self._months
             ],
         }
+        # Written only when held, so a Store without them stays as 1.3.0 wrote it.
+        if self.saved_detail is not None:
+            data["detail"] = self.saved_detail
+        if self.saved_time_zone is not None:
+            data["dnsp_time_zone"] = self.saved_time_zone
+        return data

@@ -205,6 +205,8 @@ async def test_first_sample_without_last_reset_resets(hass):
     cache.async_refresh.assert_awaited_once_with(now)
     for charge in LBAD["demand_charges"]:
         assert _tracker(manager, charge).current_block_samples == [3.0]
+        # The reset closes an empty month into the 12-month history.
+        assert _tracker(manager, charge).monthly_peaks_12 == [(0.0, None)]
 
 
 async def test_mid_cycle_sample_does_not_reset(hass):
@@ -466,3 +468,24 @@ async def test_hass_stop_flushes_every_tracker(hass, caplog):
         assert tracker.current_block_samples == []
     manager.stop()
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def test_listener_called_when_a_block_changes_a_peak(hass):
+    sydney = ZoneInfo("Australia/Sydney")
+    now = datetime(2027, 1, 15, 19, 0, tzinfo=sydney)
+    manager, _, _ = await _setup(hass, EVO_023, now)
+    calls = []
+    remove = manager.add_listener(lambda: calls.append(1))
+    _power(hass, 4.2)
+
+    manager._async_sample(now)
+    assert calls == []
+
+    manager._async_sample(now + timedelta(minutes=31))
+    assert calls == [1]
+
+    remove()
+    _power(hass, 9.0)
+    manager._async_sample(now + timedelta(minutes=35))
+    manager._async_sample(now + timedelta(minutes=61))
+    assert calls == [1]

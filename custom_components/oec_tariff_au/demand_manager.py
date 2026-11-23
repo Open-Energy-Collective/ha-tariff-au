@@ -54,6 +54,24 @@ class DemandManager:
         self._unsub_timer: Callable[[], None] | None = None
         self._unsub_hass_stop: Callable[[], None] | None = None
         self._unsub_cache: Callable[[], None] | None = None
+        self._listeners: list[Callable[[], None]] = []
+
+    def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """Call `listener` after a sample changes a peak or resets the month. Returns its remover."""
+        self._listeners.append(listener)
+
+        def remove() -> None:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
+        return remove
+
+    def _snapshot(self) -> tuple:
+        """What the demand sensors show: each tracker's peaks, and the last reset."""
+        return (
+            self.last_reset,
+            tuple((k, t.month_peak_kw, t.chargeable_demand) for k, t in self.trackers.items()),
+        )
 
     @callback
     def sync(self, now: datetime | None = None) -> None:
@@ -125,9 +143,15 @@ class DemandManager:
 
     @callback
     def _async_sample(self, now: datetime) -> None:
-        """Sample the power entity and feed every tracker."""
-        now = dt_util.as_local(now)
+        """Sample the power entity and feed every tracker; notify listeners of a change."""
+        before = self._snapshot()
+        self._sample(dt_util.as_local(now))
+        if self._snapshot() != before:
+            for listener in list(self._listeners):
+                listener()
 
+    def _sample(self, now: datetime) -> None:
+        """Reset on a new billing month, align the trackers, then feed them the power reading."""
         if self._is_new_billing_month(now):
             self._reset_billing_month(now)
         self.sync(now)

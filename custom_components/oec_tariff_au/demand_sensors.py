@@ -107,6 +107,19 @@ class OecDemandBaseSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
             "model": "Network Tariff",
         }
 
+    @property
+    def available(self) -> bool:
+        """Always True: demand is measured from the cached windows, not tariff-service."""
+        return True
+
+    async def async_added_to_hass(self) -> None:
+        """Write the state whenever the manager's peaks change, not only on coordinator updates.
+
+        A coordinator does not notify entities of a failed update that follows a failed one.
+        """
+        await super().async_added_to_hass()
+        self.async_on_remove(self._manager.add_listener(self.async_write_ha_state))
+
     def _peak_tracker(self) -> ChargeTracker | None:
         """The tracker with the highest chargeable peak, the first one on a tie."""
         trackers = list(self._manager.trackers.values())
@@ -237,16 +250,22 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
         self._attr_icon = "mdi:lightning-bolt"
 
     @property
-    def native_value(self) -> float:
+    def native_value(self) -> float | None:
         """Return the sum over charges with a peak of rate / that charge's window hours.
 
-        The window hours are the charge's cached windows in the billing month.
+        The window hours are the charge's cached windows in the billing month. While the
+        cached month is cut short (#26) its window hours are too few, so a charge with a
+        peak makes the value unknown rather than high.
         """
-        cached = self._manager.cache.charges(dt_util.now())
+        now = dt_util.now()
+        cached = self._manager.cache.charges(now)
+        partial = self._manager.cache.month_is_partial(now)
         total = 0.0
         for key, tracker in self._manager.trackers.items():
             if tracker.chargeable_demand <= 0 or key not in cached:
                 continue
+            if partial:
+                return None
             hours = window_hours(cached[key].windows)
             if hours > 0:
                 total += _rate(tracker) / hours
@@ -255,4 +274,7 @@ class OecDemandSurchargePerKwhSensor(OecDemandBaseSensor):
     @property
     def extra_state_attributes(self) -> dict:
         """Return tracking metadata."""
-        return {"demand_recorded_at": self._demand_recorded_at_iso()}
+        return {
+            "demand_recorded_at": self._demand_recorded_at_iso(),
+            "partial_month": self._manager.cache.month_is_partial(dt_util.now()),
+        }

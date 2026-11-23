@@ -140,3 +140,120 @@ def test_no_code_reads_legacy_demand():
         if LEGACY_DEMAND.search(line)
     ]
     assert hits == []
+
+
+# --- #28: the flow honours the shared Retry-After backoff --------------------
+
+from datetime import timedelta  # noqa: E402
+
+from homeassistant.util import dt as dt_util  # noqa: E402
+
+from custom_components.oec_tariff_au.const import DEFAULT_API_URL  # noqa: E402
+from custom_components.oec_tariff_au.coordinator import BACKOFF_UNTIL  # noqa: E402
+
+DNSPS_URL = f"{DEFAULT_API_URL}/dnsps"
+TARIFFS_URL = f"{DEFAULT_API_URL}/tariffs/energex"
+DETAIL_URL = f"{DEFAULT_API_URL}/tariffs/energex/3900"
+
+
+def _start_shared_backoff(hass, seconds=60):
+    """An entry's coordinator took a 429: the backoff every client of this api_url shares."""
+    hass.data.setdefault(BACKOFF_UNTIL, {})[DEFAULT_API_URL.rstrip("/")] = (
+        dt_util.utcnow() + timedelta(seconds=seconds)
+    )
+
+
+async def test_user_step_during_backoff_sends_no_request_and_shows_rate_limited(
+    hass, aioclient_mock
+):
+    aioclient_mock.get(DNSPS_URL, json=[])
+    _start_shared_backoff(hass)
+    flow = _make_flow(hass)
+
+    result = await flow.async_step_user()
+
+    assert aioclient_mock.call_count == 0
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "rate_limited"}
+
+
+async def test_tariff_step_during_backoff_sends_no_request_and_shows_rate_limited(
+    hass, aioclient_mock
+):
+    aioclient_mock.get(TARIFFS_URL, json=[])
+    _start_shared_backoff(hass)
+    flow = _make_flow(hass)
+
+    result = await flow.async_step_tariff()
+
+    assert aioclient_mock.call_count == 0
+    assert result["errors"] == {"base": "rate_limited"}
+
+
+async def test_user_step_429_starts_the_shared_backoff_and_shows_rate_limited(
+    hass, aioclient_mock, freezer
+):
+    freezer.move_to("2026-11-21T02:00:00+00:00")
+    aioclient_mock.get(DNSPS_URL, status=429, headers={"Retry-After": "45"})
+    flow = _make_flow(hass)
+
+    result = await flow.async_step_user()
+
+    assert result["errors"] == {"base": "rate_limited"}
+    until = hass.data[BACKOFF_UNTIL][DEFAULT_API_URL.rstrip("/")]
+    assert until == dt_util.utcnow() + timedelta(seconds=45)
+
+
+async def test_tariff_step_429_starts_the_shared_backoff_and_shows_rate_limited(
+    hass, aioclient_mock
+):
+    aioclient_mock.get(TARIFFS_URL, status=429, headers={"Retry-After": "30"})
+    flow = _make_flow(hass)
+
+    result = await flow.async_step_tariff()
+
+    assert result["errors"] == {"base": "rate_limited"}
+    assert DEFAULT_API_URL.rstrip("/") in hass.data[BACKOFF_UNTIL]
+
+
+async def test_demand_check_during_backoff_sends_no_request_and_fails_open(
+    hass, aioclient_mock
+):
+    aioclient_mock.get(DETAIL_URL, json={"code": "3900", "demand_charges": []})
+    _start_shared_backoff(hass)
+    flow = _make_flow(hass)
+
+    assert await flow._tariff_has_demand_component() is True
+    assert aioclient_mock.call_count == 0
+
+
+async def test_demand_check_429_starts_the_shared_backoff_and_fails_open(
+    hass, aioclient_mock
+):
+    aioclient_mock.get(DETAIL_URL, status=429, headers={"Retry-After": "30"})
+    flow = _make_flow(hass)
+
+    assert await flow._tariff_has_demand_component() is True
+    assert DEFAULT_API_URL.rstrip("/") in hass.data[BACKOFF_UNTIL]
+
+
+async def test_flow_backoff_expiry_lets_the_request_through(hass, aioclient_mock, freezer):
+    freezer.move_to("2026-11-21T02:00:00+00:00")
+    aioclient_mock.get(DNSPS_URL, json=[{"code": "energex", "name": "Energex", "state": "QLD"}])
+    _start_shared_backoff(hass, seconds=30)
+    freezer.tick(31)
+    flow = _make_flow(hass)
+
+    result = await flow.async_step_user()
+
+    assert aioclient_mock.call_count == 1
+    assert result["errors"] == {}
+
+
+def test_rate_limited_error_has_ui_text_in_strings_and_translations():
+    import json
+
+    base = Path(__file__).parent.parent / "custom_components" / "oec_tariff_au"
+    for name in ("strings.json", "translations/en.json"):
+        errors = json.loads((base / name).read_text())["config"]["error"]
+        assert errors.get("rate_limited"), name

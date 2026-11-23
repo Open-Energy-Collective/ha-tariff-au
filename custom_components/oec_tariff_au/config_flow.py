@@ -18,6 +18,7 @@ from .const import (
     DEFAULT_BILLING_DAY,
     DOMAIN,
 )
+from .coordinator import backoff_remaining, start_backoff
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,17 +46,23 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_tariff()
 
         # Fetch available DNSPs from API
-        session = async_get_clientsession(self.hass)
-        try:
-            async with session.get(
-                f"{DEFAULT_API_URL}/dnsps", timeout=10
-            ) as resp:
-                if resp.status == 200:
-                    self._dnsps = await resp.json()
-                else:
-                    errors["base"] = "cannot_connect"
-        except (aiohttp.ClientError, TimeoutError):
-            errors["base"] = "cannot_connect"
+        if backoff_remaining(self.hass, DEFAULT_API_URL) > 0:
+            errors["base"] = "rate_limited"
+        else:
+            session = async_get_clientsession(self.hass)
+            try:
+                async with session.get(
+                    f"{DEFAULT_API_URL}/dnsps", timeout=10
+                ) as resp:
+                    if resp.status == 200:
+                        self._dnsps = await resp.json()
+                    elif resp.status == 429:
+                        start_backoff(self.hass, DEFAULT_API_URL, resp, "config flow")
+                        errors["base"] = "rate_limited"
+                    else:
+                        errors["base"] = "cannot_connect"
+            except (aiohttp.ClientError, TimeoutError):
+                errors["base"] = "cannot_connect"
 
         if errors:
             return self.async_show_form(
@@ -87,17 +94,23 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self._async_finish_entry()
 
         # Fetch tariffs for selected DNSP
-        session = async_get_clientsession(self.hass)
-        try:
-            async with session.get(
-                f"{DEFAULT_API_URL}/tariffs/{self._selected_dnsp}", timeout=10
-            ) as resp:
-                if resp.status == 200:
-                    self._tariffs = await resp.json()
-                else:
-                    errors["base"] = "cannot_connect"
-        except (aiohttp.ClientError, TimeoutError):
-            errors["base"] = "cannot_connect"
+        if backoff_remaining(self.hass, DEFAULT_API_URL) > 0:
+            errors["base"] = "rate_limited"
+        else:
+            session = async_get_clientsession(self.hass)
+            try:
+                async with session.get(
+                    f"{DEFAULT_API_URL}/tariffs/{self._selected_dnsp}", timeout=10
+                ) as resp:
+                    if resp.status == 200:
+                        self._tariffs = await resp.json()
+                    elif resp.status == 429:
+                        start_backoff(self.hass, DEFAULT_API_URL, resp, "config flow")
+                        errors["base"] = "rate_limited"
+                    else:
+                        errors["base"] = "cannot_connect"
+            except (aiohttp.ClientError, TimeoutError):
+                errors["base"] = "cannot_connect"
 
         if errors:
             return self.async_show_form(
@@ -128,6 +141,8 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         (e.g. flat/ToU-only tariffs), instead of always asking for an
         optional power sensor that would never do anything.
         """
+        if backoff_remaining(self.hass, DEFAULT_API_URL) > 0:
+            return True
         session = async_get_clientsession(self.hass)
         try:
             async with session.get(
@@ -137,9 +152,11 @@ class OecTariffConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if resp.status == 200:
                     detail = await resp.json()
                     return bool(detail.get("demand_charges"))
+                if resp.status == 429:
+                    start_backoff(self.hass, DEFAULT_API_URL, resp, "config flow")
         except (aiohttp.ClientError, TimeoutError):
             pass
-        # If the check itself fails (network hiccup, etc.), fail open --
+        # If the check itself fails (network hiccup, a rate-limit backoff), fail open --
         # show the demand step rather than silently skip setup for a
         # tariff that might genuinely have a demand component.
         return True

@@ -25,7 +25,8 @@
       }
     },
     "error": {
-      "cannot_connect": "Unable to connect to Tariff Data Service API"
+      "cannot_connect": "Unable to connect to Tariff Data Service API",
+      "rate_limited": "Tariff Data Service has asked clients to wait. Try again in a minute."
     }
   },
   "options": {

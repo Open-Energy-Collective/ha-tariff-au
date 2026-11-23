@@ -7,12 +7,12 @@
 | `branching-strategy.md#milestone-releases`: tag the merge commit `vX.Y.Z` | Tag `X.Y.Z` without `v`, continuing tags `1.0.1` to `1.2.4`: `governance/adr/cross-project.md#2026-11-17-ha-tariff-au-keeps-xyz-tags` |
 
 ## Naming Convention
-- Repo: `ha-{name}` (e.g., `ha-tariff-au`) — per `naming-standards.md`, the `ha-` prefix
+- Repo: `ha-{name}` (e.g., `ha-tariff-au`). Per `naming-standards.md`, the `ha-` prefix
   is required by HACS convention even though it looks like it violates the no-prefix rule
 - HA domain: `oec_tariff_au` (underscores, no hyphens)
 - Entity prefix: derived from domain (HA handles this automatically)
-- Friendly names: NO "OEC" prefix — use descriptive names only (e.g., "Current Rate", "Demand Window")
-- Device name: `Tariff ({dnsp}/{tariff})` — contextual, not branded
+- Friendly names: NO "OEC" prefix. Use descriptive names only (e.g., "Current Rate", "Demand Window")
+- Device name: `Tariff ({dnsp}/{tariff})`. It is contextual, not branded
 
 ## File Structure
 ```
@@ -23,7 +23,6 @@ custom_components/{domain}/
 ├── config_flow.py        # UI configuration (multi-step)
 ├── coordinator.py        # DataUpdateCoordinator (API polling)
 ├── sensor.py             # Sensor entities
-├── binary_sensor.py      # Binary sensor entities
 ├── demand_windows.py     # Pure functions over the cached per-charge windows
 ├── window_cache.py       # Billing-month demand window cache (Store per entry)
 ├── charge_tracker.py     # Per-charge peak accumulator (business logic, no hass)
@@ -36,17 +35,25 @@ custom_components/{domain}/
     └── logo.png          # Wide logo for detail view
 ```
 
+```
+docs/
+├── spec/oec_tariff_au/functional-design.md   # Current behaviour: rules, Store, API (governs)
+└── design/oec_tariff_au/oec_tariff_au.md     # Design view: diagrams drawn from the spec
+```
+
+Specs and plans for a change live in the org repo, not here (`CLAUDE.md` "Specs and Plans").
+
 ## Architecture Principles
 - **Coordinator pattern**: All API communication through DataUpdateCoordinator
 - **Separation of concerns**: Business logic (e.g., charge_tracker.py, demand_manager.py) separate from entity classes
 - **RestoreEntity**: Any stateful tracking must survive HA restarts
 - **No external dependencies**: Use HA's built-in aiohttp, don't add pip requirements unless essential
-- **Config flow only**: No YAML configuration — modern HA standard
+- **Config flow only**: No YAML configuration. This is the modern HA standard
 - **Entity selectors**: Use HA's native selector UI for entity pickers
 
 ## Config Flow Design
 - Multi-step: each step gets one decision from the user
-- Fetch options live from API (DNSPs, tariffs) — don't hardcode
+- Fetch options live from API (DNSPs, tariffs). Don't hardcode them
 - Optional steps: clearly marked, user can skip
 - Validate connectivity before proceeding (show errors if API unreachable)
 
@@ -59,9 +66,9 @@ custom_components/{domain}/
 ## Testing
 
 ### Requirements
-- **All tests must pass before every commit** — run `.venv/bin/python -m pytest tests/ -v`
+- **All tests must pass before every commit**. Run `.venv/bin/python -m pytest tests/ -v`
 - Use the project `.venv` (has `homeassistant` + `pytest-homeassistant-custom-component`)
-- System Python does NOT have `homeassistant` installed — always use `.venv`
+- System Python does NOT have `homeassistant` installed. Always use `.venv`
 
 ### Test Structure
 ```
@@ -77,7 +84,7 @@ tests/
 ├── test_demand_manager.py   # Sample routing, billing reset, 1.2.x and v2 restore
 ├── test_demand_sensors.py   # Demand sensor values and attributes over the manager
 ├── test_demand_window_status_sensor.py  # Demand Window transitions from cached bounds
-├── test_binary_sensor.py    # Binary sensor logic: transitions, _status_at()
+├── test_setup.py            # Entry setup: saved path, first start, outage, unload
 ├── test_config_flow.py      # Config flow steps (TODO)
 ├── test_sensor.py           # Sensor value mapping (TODO)
 └── test_coordinator.py      # API response handling (TODO)
@@ -94,13 +101,12 @@ tests/
 - `window_cache.py`: refresh triggers, Store restore, 404 retry, no cover
 - `charge_tracker.py`: measurement methods, peak period, restore
 - `demand_manager.py`: sample routing, billing day reset, restore
-- `binary_sensor.py` — transition calculation, state at time, no-demand fallback
-- `config_flow.py` — each step, error handling, options flow
-- `sensor.py` — value mapping from coordinator data
-- `coordinator.py` — API response parsing, error handling
+- `config_flow.py`: each step, error handling, options flow
+- `sensor.py`: value mapping from coordinator data
+- `coordinator.py`: API response parsing, error handling
 
 ### Pre-commit Checklist
-1. `.venv/bin/python -m pytest tests/ -v` — ALL PASS
+1. `.venv/bin/python -m pytest tests/ -v`. ALL PASS
 2. No new code without corresponding test for testable logic
 3. Don't commit broken tests "to fix later"
 
@@ -127,7 +133,7 @@ Before a release PR merges, its tip is installed on the HA instance by hand for 
 
 ## Third-Party IP & License Compliance
 Before adding any dependency: verify it declares an approved license (MIT, Apache-2.0,
-BSD-2/3-Clause, ISC, LGPL). Anything else, unclear, or missing — stop and ask.
+BSD-2/3-Clause, ISC, LGPL). Anything else, unclear, or missing? Stop and ask.
 
 ## Security / PII review before a public push, release or HACS submission
 This repo is public (`github.com/Open-Energy-Collective/ha-tariff-au`). No

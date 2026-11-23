@@ -167,3 +167,52 @@ async def test_demand_window_unavailable_when_cover_runs_out(hass, freezer):
         assert sensor.writes[-1] == (None, {"active_charges": []})
     finally:
         await sensor.async_will_remove_from_hass()
+
+
+class _OverlapCache:
+    """Two charges whose windows overlap: peak 15:00 to 17:00, shoulder 16:00 to 18:00."""
+
+    def __init__(self):
+        from custom_components.oec_tariff_au.demand_windows import ChargeWindows
+
+        def at(hour):
+            return datetime(2027, 1, 15, hour, 0, tzinfo=MELBOURNE)
+
+        self._charges = {
+            ("peak", None): ChargeWindows({"period": "peak"}, [(at(15), at(17))]),
+            ("shoulder", None): ChargeWindows({"period": "shoulder"}, [(at(16), at(18))]),
+        }
+
+    def charges(self, when):
+        return self._charges
+
+    def covers(self, when):
+        return True
+
+    def month_end(self, when):
+        return datetime(2027, 2, 1, tzinfo=MELBOURNE)
+
+    def add_listener(self, callback):
+        return lambda: None
+
+
+async def test_overlapping_charges_write_at_every_window_bound(hass, freezer):
+    """active_charges changes at 16:00 and 17:00 although the state stays active."""
+    await hass.config.async_set_time_zone("Australia/Melbourne")
+    freezer.move_to(BEFORE_WINDOW)
+    sensor = await _added_sensor(hass, _OverlapCache())
+    try:
+        expected = [
+            (15, ("active", {"active_charges": ["peak"]})),
+            (16, ("active", {"active_charges": ["peak", "shoulder"]})),
+            (17, ("active", {"active_charges": ["shoulder"]})),
+            (18, ("inactive", {"active_charges": []})),
+        ]
+        for hour, write in expected:
+            when = datetime(2027, 1, 15, hour, 0, tzinfo=MELBOURNE)
+            freezer.move_to(when)
+            async_fire_time_changed(hass, when)
+            await hass.async_block_till_done()
+            assert sensor.writes[-1] == write, hour
+    finally:
+        await sensor.async_will_remove_from_hass()

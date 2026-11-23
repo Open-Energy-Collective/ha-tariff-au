@@ -91,11 +91,13 @@ Samples every 30 seconds. Each demand charge on the tariff is measured on its ow
 | Demand Window | `active` when any charge's window covers now. `active_charges` lists which. |
 | Month Peak Demand | Highest chargeable peak across the charges. `charges` gives each charge's peak. |
 | Monthly Demand Charge | Sum over the charges of chargeable peak times rate. `charges` gives each amount. |
-| Demand Surcharge | Sum over the charges with a recorded peak and window hours this month of rate divided by that charge's window hours in the billing month. |
+| Demand Surcharge | Sum over the charges with a recorded peak and window hours this month of rate divided by that charge's window hours in the billing month. While tariff-service has not yet published the next financial year and the billing month crosses 1 July, `partial_month` is `true` and the surcharge is unknown once any charge has a recorded peak (`0.0` while none has). |
 
 Charges that bill the highest of the last 12 months (`rolling_12_months`) use that peak. Charges in kVA are measured from your kW sensor as a stand-in, so they read low, and their `charges` entry carries `"measured_as": "kW"`.
 
 Each demand tracking sensor carries a `demand_recorded_at` attribute: the ISO timestamp at which the current chargeable peak was recorded, or unset if nothing has been recorded this billing month.
+
+After the first successful start of 1.4.0, the integration keeps the tariff detail and the distributor's time zone with its cached demand windows. A restart then starts from them without waiting on the tariff service, and fetches in the background. Current Rate, Current Period, Daily Supply Charge, Tariff Name and Demand Rate are unavailable until the tariff service answers. Month Peak Demand, Monthly Demand Charge and Demand Surcharge stay available, and keep measuring, while the tariff service is down; Demand Window stays available while the cached windows cover now. A first start with the tariff service down is retried by Home Assistant until it answers.
 
 ### Example Dashboard Card
 

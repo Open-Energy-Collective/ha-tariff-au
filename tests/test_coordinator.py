@@ -458,3 +458,82 @@ async def test_failed_tariff_detail_refetch_keeps_the_previous_detail(
     assert any(
         r.levelno == logging.WARNING and "tariff detail" in r.getMessage() for r in caplog.records
     )
+
+
+# Setup without waiting on tariff-service (#25, #29).
+
+from homeassistant.config_entries import ConfigEntryState  # noqa: E402
+from homeassistant.exceptions import ConfigEntryNotReady  # noqa: E402
+
+MELBOURNE = ZoneInfo("Australia/Melbourne")
+SAVED_DETAIL = {"code": "NASN12", "name": "saved"}
+
+
+def make_starting_coordinator(hass):
+    """A coordinator whose entry is mid-setup, as async_config_entry_first_refresh needs."""
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_DNSP: "ausnet", CONF_TARIFF: "NASN12"})
+    entry.add_to_hass(hass)
+    entry.mock_state(hass, ConfigEntryState.SETUP_IN_PROGRESS)
+    return OecTariffCoordinator(hass, entry)
+
+
+async def test_seed_sets_detail_and_zone_and_first_update_refetches_detail(hass, aioclient_mock):
+    aioclient_mock.get(RATE_URL, json={"rate": 0.1343})
+    aioclient_mock.get(DETAIL_URL, json={"code": "NASN12", "name": "fetched"})
+    coordinator = make_coordinator(hass)
+
+    coordinator.seed(SAVED_DETAIL, MELBOURNE)
+
+    assert coordinator.tariff_detail is SAVED_DETAIL
+    assert coordinator.dnsp_time_zone == MELBOURNE
+    await coordinator.async_refresh()
+    assert coordinator.tariff_detail == {"code": "NASN12", "name": "fetched"}
+
+
+async def test_seeded_zone_skips_the_dnsps_request(hass, aioclient_mock):
+    mock_rate_and_detail(aioclient_mock)
+    coordinator = make_coordinator(hass)
+    coordinator.seed(SAVED_DETAIL, MELBOURNE)
+
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success
+    assert not [c for c in aioclient_mock.mock_calls if str(c[1]).endswith("/dnsps")]
+
+
+async def test_seed_without_a_zone_leaves_it_unset(hass):
+    coordinator = make_coordinator(hass)
+
+    coordinator.seed(SAVED_DETAIL, None)
+
+    assert coordinator.dnsp_time_zone is None
+    assert coordinator.time_zone_name() is None
+
+
+async def test_first_start_raises_not_ready_when_the_detail_fails(hass, aioclient_mock):
+    aioclient_mock.get(RATE_URL, json={"rate": 0.1343})
+    aioclient_mock.get(DNSPS_URL, json=DNSPS)
+    aioclient_mock.get(DETAIL_URL, status=503)
+
+    with pytest.raises(ConfigEntryNotReady):
+        await make_starting_coordinator(hass).async_first_start()
+
+
+async def test_first_start_raises_not_ready_during_a_backoff(hass, aioclient_mock):
+    mock_rate_and_detail(aioclient_mock)
+    aioclient_mock.get(DNSPS_URL, json=DNSPS)
+    hass.data[BACKOFF_UNTIL] = {DEFAULT_API_URL: dt_util.utcnow() + timedelta(seconds=60)}
+
+    with pytest.raises(ConfigEntryNotReady):
+        await make_starting_coordinator(hass).async_first_start()
+
+
+async def test_first_start_succeeds_with_rate_zone_and_detail(hass, aioclient_mock):
+    mock_rate_and_detail(aioclient_mock)
+    aioclient_mock.get(DNSPS_URL, json=DNSPS)
+    coordinator = make_starting_coordinator(hass)
+
+    await coordinator.async_first_start()
+
+    assert coordinator.tariff_detail == {"demand": None}
+    assert coordinator.time_zone_name() == "Australia/Melbourne"
